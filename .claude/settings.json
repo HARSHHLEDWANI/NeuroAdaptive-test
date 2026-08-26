@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker exec:*)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/message -H 'x-user-email: test@test.com' -H 'x-internal-token: __CMDSUB_OUTPUT__' -F prompt=hello)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/message -H 'x-user-email: harsh.ledwani.btech2023@sitpune.edu.in' -H 'x-internal-token: __TRACKED_VAR__' -F prompt=hello)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('session_id:', d['session_id']\\); print\\('text[:200]:', d['text'][:200]\\)\")",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/message -H 'x-user-email: test@test.com' -H 'x-internal-token: wrong' -F prompt=hello)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/message -H 'x-user-email: test@test.com' -H 'x-internal-token: wrong' -H 'Content-Type: application/json' -d '{\"prompt\":\"hello\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/message -H 'x-user-email: test@test.com' -H 'x-internal-token: 9b3a2f8c4e1d7a6b5c9f0e2d1a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b' -F 'prompt=hello world')",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/message -H 'x-user-email: test@test.com' -H 'x-internal-token: 9b3a2f8c4e1d7a6b5c9f0e2d1a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b' -F session_id=5)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/message -H 'x-internal-token: 9b3a2f8c4e1d7a6b5c9f0e2d1a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b' -F prompt=hello)",
+      "Bash(curl -s -X POST http://localhost:8000/api/v1/chat/message -H 'x-user-email: test@test.com' -F prompt=hello)",
+      "Bash(docker restart:*)"
+    ]
+  }
+}
