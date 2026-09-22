@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth"; // Update this import if your auth is elsewhere
+import { requireInternalToken } from "@/lib/internal-auth";
+
+// Rough proxy for the backend's own MAX_MESSAGE_CHARS guard (chat/router.py),
+// checked here on raw upload bytes before ever proxying to the backend. A
+// large attached file previously spent tens of seconds being read, forwarded,
+// and PDF-extracted just to be rejected by the backend's character check --
+// this rejects it instantly instead, so the dev server (and this one Node
+// process) isn't tied up on a request that was always going to fail.
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_PROMPT_CHARS = 60_000;
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,6 +27,19 @@ export async function POST(req: NextRequest) {
     const prompt = (incoming.get("prompt") as string | null) ?? "";
     const sessionId = incoming.get("session_id") as string | null;
     const file = incoming.get("file") as File | null;
+
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      return NextResponse.json(
+        { error: `Your message is too long (${prompt.length.toLocaleString()} characters, limit ${MAX_PROMPT_CHARS.toLocaleString()}). Try a shorter message.` },
+        { status: 413 }
+      );
+    }
+    if (file && file.size > MAX_FILE_BYTES) {
+      return NextResponse.json(
+        { error: `That file is too large (${(file.size / 1024 / 1024).toFixed(1)} MB, limit ${MAX_FILE_BYTES / 1024 / 1024} MB). Try a smaller file.` },
+        { status: 413 }
+      );
+    }
 
     const backendFormData = new FormData();
     backendFormData.append("prompt", prompt);
@@ -38,7 +61,7 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: {
         "x-user-email": session.user.email,
-        "x-internal-token": internalKey,
+        "x-internal-token": requireInternalToken(),
         // Content-Type set automatically by fetch when body is FormData
       },
       body: backendFormData,
@@ -52,7 +75,7 @@ export async function POST(req: NextRequest) {
         try {
           const parsed = JSON.parse(errorText);
           if (parsed.detail) errorDetail = typeof parsed.detail === 'string' ? parsed.detail : JSON.stringify(parsed.detail);
-        } catch(e) {}
+        } catch {}
 
         return NextResponse.json({ error: errorDetail }, { status: response.status });
     }
@@ -61,8 +84,8 @@ export async function POST(req: NextRequest) {
     
     return NextResponse.json(data);
 
-  } catch (error) {
-    console.error("Chat API Route Error:", error);
+  } catch (e: unknown) {
+    console.error("Chat API error:", e);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

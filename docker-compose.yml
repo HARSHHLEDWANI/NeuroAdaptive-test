@@ -8,9 +8,22 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: neuro_db
     ports:
-      - "5432:5432"
+      # Host-side 5433: this machine already runs a native PostgreSQL on 5432.
+      # Containers still reach this database at db:5432 over the compose
+      # network, so only external tools (psql, a GUI) use the mapped port.
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: neuro_qdrant
+    restart: always
+    ports:
+      - "6333:6333"   # REST
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
 
   backend:
     build:
@@ -19,14 +32,19 @@ services:
     container_name: neuro_backend
     command: sh wait-for-db.sh
     ports:
-      - "8000:8000"
+      - "8001:8000"
     # Notice: We removed the hardcoded DATABASE_URL and INTERNAL_API_KEY
     env_file:
       - ./backend/.env
     volumes:
       - ./backend:/app
+      # Uploaded originals live on the backend's local disk this sprint rather
+      # than object storage; served only through an authenticated,
+      # owner-checked endpoint. See SPRINT_LOG.md for the substitution.
+      - uploaded_documents:/app/var/uploads
     depends_on:
       - db
+      - qdrant
 
   frontend:
     build:
@@ -34,11 +52,14 @@ services:
       dockerfile: Dockerfile
     container_name: neuro_frontend
     ports:
-      - "3000:3000"
+      - "3001:3000"
     env_file:
       - ./frontend/.env.local
     environment:
       # It is okay to leave non-secret configuration variables here
+      # OAuth callbacks must use the host-facing port, not the container's
+      # internal port. This overrides the port-3000 value used by `npm run dev`.
+      - NEXTAUTH_URL=http://localhost:3001
       - INTERNAL_API_URL=http://backend:8000
       - CHOKIDAR_USEPOLLING=true
       - WATCHPACK_POLLING=true
@@ -50,3 +71,5 @@ services:
 
 volumes:
   postgres_data:
+  qdrant_data:
+  uploaded_documents:
