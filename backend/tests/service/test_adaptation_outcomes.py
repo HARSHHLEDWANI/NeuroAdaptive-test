@@ -19,7 +19,7 @@ from app.modules.adaptation.outcome_service import (
 )
 from app.modules.courses.models import Course
 from app.modules.curriculum.models import Concept, CourseVersion, CourseVersionStatus
-from app.modules.mastery.models import MasteryEvent, Question, QuestionAttempt
+from app.modules.mastery.models import MasteryEvent, Question, QuestionAttempt, QuestionConcept
 from app.modules.mastery.service import MasteryService
 from app.services.embedding.fake import FakeEmbeddingGateway
 from app.services.generation.fake import FakeGenerationGateway
@@ -72,6 +72,7 @@ def make_question_attempt(db_session, owner, course, concept, correctness=1.0, h
     )
     db_session.add(question)
     db_session.flush()
+    db_session.add(QuestionConcept(question_id=question.id, concept_id=concept.id, weight=1.0))
     attempt = QuestionAttempt(
         question_id=question.id, question_version=1, owner_id=owner.id, course_id=course.id,
         given_answer="a", correctness=correctness, hints_used=hints_used, time_taken_seconds=time_taken,

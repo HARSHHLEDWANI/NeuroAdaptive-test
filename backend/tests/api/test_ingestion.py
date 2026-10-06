@@ -95,11 +95,9 @@ class TestUploadValidation:
         assert response.status_code == 400
 
     def test_enforces_the_study_file_cap(self, client, owner, course):
-        for _ in range(2):
-            assert unique_upload(client, owner.email, course["id"]).status_code == 201
-        third = unique_upload(client, owner.email, course["id"])
-        assert third.status_code == 400
-        assert "maximum" in third.json()["detail"]
+        for i in range(5):
+            assert upload(client, owner.email, course["id"], content=f"{PROSE} unique-{i}".encode()).status_code == 201
+        assert upload(client, owner.email, course["id"], content=f"{PROSE} unique-5".encode()).status_code == 400
 
     def test_syllabus_has_its_own_cap(self, client, owner, course):
         assert unique_upload(client, owner.email, course["id"], role="SYLLABUS").status_code == 201
@@ -249,7 +247,7 @@ class TestPastedText:
             assert response.status_code == 201
         sixth = client.post(
             self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
-            json={"title": "Note 3", "text": f"{PROSE} unique-3"},
+            json={"title": "Note 5", "text": f"{PROSE} unique-5"},
             headers=auth_headers(owner.email),
         )
         assert sixth.status_code == 400
@@ -274,8 +272,10 @@ class TestPipeline:
         done = {s["name"] for s in body["stages"] if s["status"] == "SUCCEEDED"}
         assert done == {
             "VALIDATING", "EXTRACTING", "CHUNKING", "INDEXING",
-            "EXTRACTING_CONCEPTS", "BUILDING_GRAPH", "GENERATING_STRUCTURE", "VALIDATING_COURSE",
+            "EXTRACTING_CONCEPTS",
         }
+        skipped = {s["name"] for s in body["stages"] if s["status"] == "SKIPPED"}
+        assert skipped == {"BUILDING_GRAPH", "GENERATING_STRUCTURE", "VALIDATING_COURSE"}
 
     def test_produces_chunks_with_provenance(self, client, owner, course, db_session):
         upload(client, owner.email, course["id"])
@@ -509,69 +509,22 @@ class TestConcurrentProcessingIsRejected:
         assert response.status_code != 409
 
 
-class TestOrphanedJobReconciledOnStartup:
-    """
-    jobs/service.py runs the pipeline in-process, not on a queue (see that
-    module's docstring), so a job stuck PENDING/RUNNING can only mean the
-    process that owned it died mid-run (crash, OOM, container restart)
-    before marking it FAILED. Without the app.main lifespan's reconciliation,
-    that stuck job would block every future /process call for the course
-    with a 409 forever, since no other process is ever coming back to finish
-    it -- reproduced live after a backend OOM crash left a job RUNNING.
-    """
-
-    def test_a_stale_running_job_is_marked_failed_on_restart(self, client, owner, course, db_session):
-        from uuid import UUID as _UUID
-
-        from app.modules.courses.models import Course, CourseStatus
-        from app.modules.jobs.models import (
-            JobStatus,
-            ProcessingJob,
-            ProcessingStage,
-            ProcessingStageName,
-            StageStatus,
-        )
-
-        job = ProcessingJob(
-            course_id=_UUID(course["id"]),
-            owner_id=owner.id,
-            status=JobStatus.RUNNING.value,
-            current_stage=ProcessingStageName.INDEXING.value,
-        )
-        db_session.add(job)
-        db_session.flush()
-        stage = ProcessingStage(
-            job_id=job.id,
-            name=ProcessingStageName.INDEXING.value,
-            position=3,
-            status=StageStatus.RUNNING.value,
-        )
-        db_session.add(stage)
-        db_session.commit()
-
-        # Simulate the backend restarting: re-run app.main's lifespan on the
-        # same app instance. dependency_overrides from the `client` fixture
-        # still point get_db at this same db_session, so this reconciles the
-        # job just inserted above rather than a real database.
+class TestApiRestartPreservesWorkerJobs:
+    def test_api_restart_does_not_change_a_running_worker_job(self, client, owner, course, db_session):
+        from datetime import datetime, timedelta, timezone
         from fastapi.testclient import TestClient
-
         from app.main import app
-
+        from app.modules.jobs.models import ProcessingJob
+        from uuid import UUID, uuid4
+        job = ProcessingJob(course_id=UUID(course["id"]), owner_id=owner.id,
+            status="RUNNING", lease_token=uuid4(),
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=120))
+        db_session.add(job)
+        db_session.commit()
+        token = job.lease_token
         with TestClient(app):
             pass
-
         db_session.refresh(job)
-        assert job.status == JobStatus.FAILED.value
-        assert job.error_category == "INTERRUPTED"
-
-        db_session.refresh(stage)
-        assert stage.status == StageStatus.FAILED.value
-
-        reconciled_course = db_session.query(Course).filter(Course.id == job.course_id).first()
-        assert reconciled_course.status == CourseStatus.FAILED.value
-
-        # The course is no longer blocked: a fresh /process call is accepted.
-        response = client.post(
-            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
-        )
-        assert response.status_code != 409
+        assert job.status == "RUNNING"
+        assert job.lease_token == token
+        assert client.post(f"/api/v1/jobs/{job.id}/retry", headers=auth_headers(owner.email)).status_code == 409

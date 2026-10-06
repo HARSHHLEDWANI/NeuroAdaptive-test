@@ -1,3 +1,11 @@
+import pytest
+from app.core.config import settings
+
+@pytest.fixture(autouse=True)
+def evaluator_access(owner, monkeypatch):
+    # Scope access to the researcher fixture only; normal learners still fail.
+    monkeypatch.setattr(settings, "EVALUATOR_EMAILS", owner.email)
+
 from tests.conftest import auth_headers
 
 

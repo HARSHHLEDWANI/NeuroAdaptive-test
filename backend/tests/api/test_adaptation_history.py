@@ -6,7 +6,7 @@ import uuid
 
 from app.modules.courses.models import Course
 from app.modules.curriculum.models import Concept, CourseVersion, CourseVersionStatus
-from app.modules.mastery.models import Question, QuestionAttempt
+from app.modules.mastery.models import Question, QuestionAttempt, QuestionConcept
 from tests.conftest import auth_headers
 
 
@@ -76,6 +76,7 @@ class TestAdaptationHistoryShape:
         )
         db_session.add(question)
         db_session.flush()
+        db_session.add(QuestionConcept(question_id=question.id, concept_id=concept.id, weight=1.0))
         attempt = QuestionAttempt(
             question_id=question.id, question_version=1, owner_id=owner.id, course_id=course.id,
             given_answer="a", correctness=1.0,
@@ -184,12 +185,8 @@ class TestFullEndToEndLoop:
         )
         assert complete_resp.status_code == 200
 
-        # New evidence appears (a follow-up assessment moves real mastery).
-        db_session.add(MasteryEvent(
-            owner_id=owner.id, concept_id=concept.id, course_id=course.id, course_version_id=version.id,
-            correctness=1.0, evidence_weight_base=50.0,
-        ))
-        db_session.commit()
+        # Submit through the actual grading API so evidence is produced by
+        # the same public seam a learner uses, never a fabricated mastery row.
         question = Question(
             course_id=course.id, course_version_id=version.id, owner_id=owner.id,
             question_type="MCQ", prompt="?", options=["a", "b"], correct_answer="a",
@@ -197,12 +194,13 @@ class TestFullEndToEndLoop:
         )
         db_session.add(question)
         db_session.flush()
-        attempt = QuestionAttempt(
-            question_id=question.id, question_version=1, owner_id=owner.id, course_id=course.id,
-            given_answer="a", correctness=1.0,
-        )
-        db_session.add(attempt)
+        db_session.add(QuestionConcept(question_id=question.id, concept_id=concept.id, weight=1.0))
         db_session.commit()
+        submitted = client.post(f"/api/v1/questions/{question.id}/attempts",
+            headers=auth_headers(owner.email), json={"given_answer": "a"})
+        assert submitted.status_code == 201
+        attempt = db_session.get(QuestionAttempt, uuid.UUID(submitted.json()["id"]))
+        assert attempt is not None
 
         # 3. The follow-up assessment outcome is recorded and linked.
         assess_resp = client.post(

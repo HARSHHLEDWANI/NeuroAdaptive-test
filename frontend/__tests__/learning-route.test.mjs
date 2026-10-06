@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { studyHrefForRecommendation } from "../lib/learning-route.ts";
+import { loadTs } from "./load-ts.mjs";
+const { studyHrefForRecommendation } = await loadTs("../lib/learning-route.ts");
 
 const courseId = "course-1";
 const structure = {

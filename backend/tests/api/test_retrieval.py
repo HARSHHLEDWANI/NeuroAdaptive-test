@@ -73,7 +73,7 @@ class TestPipelineReachesReady:
         done = {s["name"] for s in job["stages"] if s["status"] == "SUCCEEDED"}
         assert done == {
             "VALIDATING", "EXTRACTING", "CHUNKING", "INDEXING",
-            "EXTRACTING_CONCEPTS", "BUILDING_GRAPH", "GENERATING_STRUCTURE", "VALIDATING_COURSE",
+            "EXTRACTING_CONCEPTS",
         }
 
     def test_indexed_chunks_are_marked_indexed(self, client, owner, db_session):

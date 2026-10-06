@@ -1,15 +1,36 @@
 name: CI
-
 on:
   pull_request:
   push:
-    branches:
-      - develop
-
+    branches: [develop]
 jobs:
   backend-tests:
-    name: Backend tests (Python 3.11)
+    name: Backend and disposable-service integration
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: integration-only
+          POSTGRES_DB: neurolearn_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d neurolearn_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      INTERNAL_API_KEY: test-internal-token-xxxxxxxxxxxxxxxxxxxxxxxx
+      SECRET_KEY: test-secret-key-yyyyyyyyyyyyyyyyyyyyyyyy
+      PGVECTOR_TEST_DATABASE_URL: postgresql://postgres:integration-only@localhost:5432/neurolearn_test
+      REDIS_TEST_URL: redis://localhost:6379/2
+      REQUIRE_INTEGRATION: "1"
+      TIKTOKEN_CACHE_DIR: /tmp/neurolearn-tokenizer
     defaults:
       run:
         working-directory: backend
@@ -19,16 +40,23 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: |
-            backend/requirements.txt
-            backend/requirements-dev.txt
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: pip install -c constraints.txt -r requirements.txt -r requirements-dev.txt
+      - name: Provision real tokenizer
+        run: python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+      - name: Apply migrations to disposable PostgreSQL
+        run: DATABASE_URL="$PGVECTOR_TEST_DATABASE_URL" alembic upgrade head
+      - run: ruff check .
       - run: python -m pytest
-
+      - run: python scripts/export_openapi.py --check
   frontend-checks:
-    name: Frontend lint, type-check, and build
+    name: Web tests, contracts, lint, types and build
     runs-on: ubuntu-latest
+    env:
+      INTERNAL_API_URL: http://127.0.0.1:8001
+      INTERNAL_API_KEY: test-internal-token-xxxxxxxxxxxxxxxxxxxxxxxx
+      NEXTAUTH_SECRET: build-only-auth-secret-xxxxxxxxxxxxxxxxxxxxxxxx
+      GOOGLE_CLIENT_ID: build-only-client
+      GOOGLE_CLIENT_SECRET: build-only-secret
     defaults:
       run:
         working-directory: frontend
@@ -39,7 +67,14 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -c ../backend/constraints.txt -r ../backend/requirements.txt
       - run: npm ci
+      - run: npm run contracts:check
+      - run: npm test
       - run: npm run lint
-      - run: npx tsc --noEmit
+      - run: npm run typecheck
       - run: npm run build

@@ -20,6 +20,10 @@ Approved 2026-10-06; current agent is authorized to execute all baseline areas. 
 4. Editable course outline and source-gap review; presentation feedback.
 5. Focused academic UX and progress views.
 6. Hosted private deployment, privacy deletion/pilot hardening.
-7. Technical baselines and consenting descriptive pilot; correct black book against exact tested snapshot.
+7. Align documented per-course input/page limits, verify dependency/runtime advisories and live provider/auth/storage contracts.
+8. Technical baselines and consenting descriptive pilot; correct black book against exact tested snapshot.
 
 Integrate through develop; promote only executed green checkpoints. Historical migrations, learner records and published branch history remain intact.
+
+## Baseline checkpoint
+B00–B07 are complete locally; docs/BASELINE_REPORT.md records execution and remaining limits. No full-loop/pilot/hosted deployment claim follows from this checkpoint.

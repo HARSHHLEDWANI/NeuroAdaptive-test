@@ -29,3 +29,6 @@ Vercel web; Railway API/worker; Supabase PostgreSQL/pgvector/private Storage; Up
 
 ## Invariants
 No runtime fixture courses or fake AI. No schema evolution via create_all. No migration rewrites or user-data deletion. Publication follows validation. Owner isolation returns 404. Mastery and recommendations remain deterministic; decisions and subsequent outcomes stay separate. Unimplemented features remain visibly unavailable.
+
+## Private storage assumption checked 2026-10-06
+S3 HEAD must set ChecksumMode=ENABLED to retrieve checksum metadata ([official HeadObject API](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html)). The adapter requests it and treats missing/mismatched checksums as rejection. Botocore Stubber tests verify the protocol without network; Supabase live compatibility is still unverified. Unconfigured storage fails before ambient AWS credential discovery, and only that explicit state permits the web local-upload fallback.

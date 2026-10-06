@@ -79,16 +79,13 @@ def fake_vectors():
 @pytest.fixture()
 def fake_generation():
     """
-    Default: no concepts found in any section. This lets a test that only
-    cares about ingestion (not curriculum content) run the full pipeline to
-    a real READY without asserting anything about generated concepts -- an
-    empty concept set passes validation trivially (no concepts, no lessons
-    required, no cycle possible, no blueprint required). A test that DOES
-    care about curriculum content overrides this fixture's responses.
+    A nonempty synthetic concept exercises validation rather than relying on
+    an empty course passing vacuous checks. Tests of insufficient generation
+    explicitly replace the response with an empty concept list.
     """
     from app.services.generation.fake import FakeGenerationGateway
 
-    return FakeGenerationGateway().set_default('{"concepts": [], "edges": []}')
+    return FakeGenerationGateway().set_default('{"concepts": [{"name": "Study concept", "definition": "A concept in the synthetic test material.", "importance": 0.5}], "edges": []}')
 
 
 @pytest.fixture()

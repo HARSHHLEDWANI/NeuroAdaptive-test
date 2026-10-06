@@ -20,16 +20,16 @@ class TestParsing:
         parsed = parse_tutor_response(raw)
         assert parsed.insufficient_evidence is True
 
-    def test_malformed_individual_claim_is_dropped_not_fatal(self):
+    def test_malformed_claim_rejects_the_response(self):
         raw = '{"insufficient_evidence": false, "answer_markdown": "X.", "claims": [{"text": "X."}]}'
-        parsed = parse_tutor_response(raw)
-        assert parsed.claims == []
+        with pytest.raises(TutorParseError):
+            parse_tutor_response(raw)
 
     def test_unparseable_response_raises(self):
         with pytest.raises(TutorParseError):
             parse_tutor_response("not json at all")
 
-    def test_missing_claims_field_defaults_to_empty(self):
+    def test_an_answer_without_claims_is_rejected(self):
         raw = '{"insufficient_evidence": false, "answer_markdown": "X."}'
-        parsed = parse_tutor_response(raw)
-        assert parsed.claims == []
+        with pytest.raises(TutorParseError):
+            parse_tutor_response(raw)

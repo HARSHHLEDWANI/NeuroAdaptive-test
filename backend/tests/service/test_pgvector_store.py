@@ -24,6 +24,8 @@ def _vector(axis: int) -> list[float]:
 def pgvector_session():
     url = os.getenv("PGVECTOR_TEST_DATABASE_URL")
     if not url:
+        if os.getenv("REQUIRE_INTEGRATION") == "1":
+            pytest.fail("PGVECTOR_TEST_DATABASE_URL is required in CI")
         pytest.skip("PGVECTOR_TEST_DATABASE_URL is required for pgvector integration tests")
 
     engine = create_engine(url)

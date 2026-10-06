@@ -252,4 +252,5 @@ class TestVersionIsolation:
 
         result = validate_course_version(db_session, version)
 
-        assert result.is_valid
+        assert not result.is_valid
+        assert result.errors == ["The course contains no teachable concepts; add readable source material."]

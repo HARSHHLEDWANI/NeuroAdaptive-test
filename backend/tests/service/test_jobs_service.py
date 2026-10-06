@@ -127,7 +127,7 @@ class TestProviderFailurePausesWithAFriendlyReason:
             db_session,
             embeddings=_AlwaysQuotaExhaustedEmbeddings(),
             vectors=FakeVectorStore(),
-            generation=FakeGenerationGateway().set_default('{"concepts": [], "edges": []}'),
+            generation=FakeGenerationGateway().set_default('{"concepts": [{"name": "Deadlock", "definition": "A waiting state."}], "edges": []}'),
         )
         paused = broken_service.run(job.id, owner.id)
         assert paused.status == JobStatus.PAUSED.value
@@ -138,8 +138,9 @@ class TestProviderFailurePausesWithAFriendlyReason:
             db_session,
             embeddings=FakeEmbeddingGateway(),
             vectors=FakeVectorStore(),
-            generation=FakeGenerationGateway().set_default('{"concepts": [], "edges": []}'),
+            generation=FakeGenerationGateway().set_default('{"concepts": [{"name": "Deadlock", "definition": "A waiting state."}], "edges": []}'),
         )
+        recovered_service.prepare_retry(job.id, owner.id)
         result = recovered_service.run(job.id, owner.id)
 
         assert result.status == JobStatus.READY.value
