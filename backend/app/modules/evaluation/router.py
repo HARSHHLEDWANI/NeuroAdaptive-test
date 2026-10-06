@@ -1,8 +1,6 @@
-"""
-Evaluation harness API surface. Authentication only, no admin-role gate --
-this codebase has no admin role yet (the same stated gap Phase 6's audit
-log has); a real deployment running an actual pilot would add one before
-exposing this beyond a researcher's own use.
+"""Evaluation administration requires the server evaluator allowlist.
+Learners may read only their own assigned condition. No persistent role system
+or pilot authorization is implied by the local allowlist.
 """
 from typing import List, Optional
 from uuid import UUID
@@ -11,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_evaluator_user
 from app.db.session import get_db
 from app.modules.auth.models import User
 from app.modules.evaluation.service import DuplicateAssignment, EvaluationNotFound, EvaluationService
@@ -43,7 +41,7 @@ class AssignIn(BaseModel):
 @router.post("/evaluation/experiments", status_code=201)
 def create_experiment(
     body: ExperimentCreateIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_evaluator_user),
     service: EvaluationService = Depends(_service),
     db: Session = Depends(get_db),
 ):
@@ -56,7 +54,7 @@ def create_experiment(
 @router.get("/evaluation/experiments/{experiment_id}/conditions")
 def list_conditions(
     experiment_id: UUID,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_evaluator_user),
     service: EvaluationService = Depends(_service),
 ):
     try:
@@ -70,7 +68,7 @@ def list_conditions(
 def assign_learner(
     experiment_id: UUID,
     body: AssignIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_evaluator_user),
     service: EvaluationService = Depends(_service),
     db: Session = Depends(get_db),
 ):

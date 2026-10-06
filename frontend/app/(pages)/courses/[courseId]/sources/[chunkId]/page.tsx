@@ -1,19 +1,12 @@
 "use client";
 
+import type { components } from "@/lib/generated/api";
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { StateWrapper } from "@/components/StateWrapper";
 import { ArrowLeft, FileText } from "lucide-react";
 
-interface ChunkDetail {
-  chunk_id: string;
-  document_id: string;
-  filename: string;
-  text: string;
-  heading_path: string | null;
-  page_start: number | null;
-  page_end: number | null;
-}
+type ChunkDetail = components["schemas"]["ChunkDetail"];
 
 export default function SourceViewerPage() {
   const params = useParams();

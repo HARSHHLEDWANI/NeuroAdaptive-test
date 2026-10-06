@@ -1,3 +1,6 @@
+from app.modules.documents.storage import StorageUnavailable
+from app.core.problem_details import ProblemDetailException
+from app.modules.documents.schemas import DocumentOut, UploadIntentOut
 from typing import List, Optional
 from uuid import UUID
 
@@ -56,7 +59,7 @@ class UploadIntentIn(BaseModel):
     content_type: Optional[str] = Field(default=None, max_length=128)
 
 
-@router.post("/courses/{course_id}/documents/upload-intents", status_code=201)
+@router.post("/courses/{course_id}/documents/upload-intents", status_code=201, response_model=UploadIntentOut)
 def create_upload_intent(
     course_id: UUID, body: UploadIntentIn, user: User = Depends(get_current_user),
     service: DocumentService = Depends(_service),
@@ -68,6 +71,10 @@ def create_upload_intent(
         )
     except (DocumentNotFound, CourseNotFound):
         raise HTTPException(status_code=404, detail="Course not found")
+    except StorageUnavailable as exc:
+        code = "storage-unavailable" if exc.configured else "storage-not-configured"
+        raise ProblemDetailException(status_code=503, type_=f"https://neurolearn.internal/problems/{code}",
+            title="Private Storage Unavailable", detail=str(exc))
     except SourcesLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except UploadRejected as exc:
@@ -76,7 +83,7 @@ def create_upload_intent(
             "required_headers": upload.required_headers, "expires_at": intent.expires_at}
 
 
-@router.post("/courses/{course_id}/documents/finalize/{intent_id}", status_code=201)
+@router.post("/courses/{course_id}/documents/finalize/{intent_id}", status_code=201, response_model=DocumentOut)
 def finalize_upload(
     course_id: UUID, intent_id: UUID, user: User = Depends(get_current_user),
     service: DocumentService = Depends(_service),
@@ -85,13 +92,17 @@ def finalize_upload(
         return _out(service.finalize_upload(course_id, intent_id, user.id))
     except UploadIntentNotFound:
         raise HTTPException(status_code=404, detail="Upload intent not found")
+    except StorageUnavailable as exc:
+        code = "storage-unavailable" if exc.configured else "storage-not-configured"
+        raise ProblemDetailException(status_code=503, type_=f"https://neurolearn.internal/problems/{code}",
+            title="Private Storage Unavailable", detail=str(exc))
     except SourcesLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except UploadRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
-@router.post("/courses/{course_id}/documents")
+@router.post("/courses/{course_id}/documents", response_model=DocumentOut, responses={201: {"model": DocumentOut}})
 async def upload_document(
     course_id: UUID,
     file: UploadFile = File(...),
@@ -111,6 +122,10 @@ async def upload_document(
         )
     except DocumentNotFound:
         raise HTTPException(status_code=404, detail="Course not found")
+    except StorageUnavailable as exc:
+        code = "storage-unavailable" if exc.configured else "storage-not-configured"
+        raise ProblemDetailException(status_code=503, type_=f"https://neurolearn.internal/problems/{code}",
+            title="Private Storage Unavailable", detail=str(exc))
     except SourcesLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except UploadRejected as exc:
@@ -119,10 +134,10 @@ async def upload_document(
     # 201 for a genuinely new document; 200 on a checksum dedup hit, since
     # nothing was created -- the existing document and its processed
     # artifacts (if any) are simply returned.
-    return JSONResponse(status_code=201 if created else 200, content=jsonable_encoder(_out(document)))
+    return JSONResponse(status_code=201 if created else 200, content=jsonable_encoder(DocumentOut.model_validate(_out(document))))
 
 
-@router.post("/courses/{course_id}/documents/paste")
+@router.post("/courses/{course_id}/documents/paste", response_model=DocumentOut, responses={201: {"model": DocumentOut}})
 def paste_text_document(
     course_id: UUID,
     body: PasteTextIn,
@@ -144,15 +159,19 @@ def paste_text_document(
         )
     except DocumentNotFound:
         raise HTTPException(status_code=404, detail="Course not found")
+    except StorageUnavailable as exc:
+        code = "storage-unavailable" if exc.configured else "storage-not-configured"
+        raise ProblemDetailException(status_code=503, type_=f"https://neurolearn.internal/problems/{code}",
+            title="Private Storage Unavailable", detail=str(exc))
     except SourcesLocked as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except UploadRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return JSONResponse(status_code=201 if created else 200, content=jsonable_encoder(_out(document)))
+    return JSONResponse(status_code=201 if created else 200, content=jsonable_encoder(DocumentOut.model_validate(_out(document))))
 
 
-@router.get("/courses/{course_id}/documents")
+@router.get("/courses/{course_id}/documents", response_model=list[DocumentOut])
 def list_documents(
     course_id: UUID,
     user: User = Depends(get_current_user),
@@ -181,6 +200,8 @@ def download_document(
         content = service.read_bytes(document)
     except DocumentNotFound:
         raise HTTPException(status_code=404, detail="Document not found")
+    except StorageUnavailable:
+        raise HTTPException(status_code=503, detail="Private storage is unavailable")
 
     return Response(
         content=content,

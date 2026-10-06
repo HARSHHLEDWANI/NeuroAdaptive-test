@@ -3,6 +3,7 @@ from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.modules.jobs.schemas import JobSummary
 
 
 class CourseCreate(BaseModel):
@@ -29,7 +30,7 @@ class CourseOut(BaseModel):
     status: str
     sources_finalized_at: Optional[datetime]
     source_count: int = 0
-    latest_job: Optional[dict] = None
+    latest_job: Optional[JobSummary] = None
     latest_review_version_id: Optional[UUID] = None
     active_version_id: Optional[UUID] = None
     created_at: Optional[datetime]

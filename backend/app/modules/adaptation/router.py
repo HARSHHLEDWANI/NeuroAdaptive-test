@@ -11,6 +11,8 @@ behavior the pack's tests actually check (decision_id, a recommended object
 with a reason, an alternatives array) is implemented and tested under this
 name.
 """
+from app.services.providers import generation_gateway, embedding_gateway, vector_store
+from app.modules.adaptation.schemas import RecommendationOut
 from typing import Optional
 from uuid import UUID
 
@@ -50,10 +52,10 @@ class PresentationSwitchIn(BaseModel):
 
 
 def _service(db: Session = Depends(get_db)) -> AdaptationService:
-    return AdaptationService(db, GeminiGenerationGateway(), GeminiEmbeddingGateway())
+    return AdaptationService(db, generation_gateway(), embedding_gateway())
 
 
-@router.get("/courses/{course_id}/next-activity")
+@router.get("/courses/{course_id}/next-activity", response_model=RecommendationOut, response_model_exclude_unset=True)
 def get_next_activity(
     course_id: UUID,
     user: User = Depends(get_current_user),
@@ -120,7 +122,7 @@ def reset_presentation_affinity(
 
 
 def _outcome_service(db: Session = Depends(get_db)) -> AdaptationOutcomeService:
-    return AdaptationOutcomeService(db, MasteryService(db, GeminiGenerationGateway(), GeminiEmbeddingGateway()))
+    return AdaptationOutcomeService(db, MasteryService(db, generation_gateway(), embedding_gateway()))
 
 
 class EngagementOutcomeIn(BaseModel):
@@ -151,7 +153,7 @@ def record_engagement_outcome(
     mastery_delta or transfer_success -- those only come from
     /outcomes/assessment, which requires real QuestionAttempt evidence."""
     try:
-        outcome = service.record_engagement(decision_id, user.id, body.outcome_type, body.extra)
+        outcome = service.record_engagement(decision_id, user.id, body.outcome_type, body.extra, course_id=course_id)
     except AdaptationOutcomeNotFound:
         raise HTTPException(status_code=404, detail="Decision not found")
     except InvalidOutcome as exc:
@@ -170,7 +172,7 @@ def record_helpfulness_outcome(
     """Explicit learner feedback -- self-reported, kept in its own
     signal_category, never averaged with measured mastery change."""
     try:
-        outcome = service.record_helpfulness_feedback(decision_id, user.id, body.rating)
+        outcome = service.record_helpfulness_feedback(decision_id, user.id, body.rating, course_id=course_id)
     except AdaptationOutcomeNotFound:
         raise HTTPException(status_code=404, detail="Decision not found")
     except InvalidOutcome as exc:
@@ -197,7 +199,7 @@ def record_assessment_outcome(
         outcome = service.record_assessment_outcome(
             decision_id, user.id, body.question_attempt_id,
             is_transfer_question=body.is_transfer_question,
-            baseline_question_attempt_id=body.baseline_question_attempt_id,
+            baseline_question_attempt_id=body.baseline_question_attempt_id, course_id=course_id,
         )
     except AdaptationOutcomeNotFound:
         raise HTTPException(status_code=404, detail="Decision or question attempt not found")

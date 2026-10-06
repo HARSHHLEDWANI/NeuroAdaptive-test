@@ -1,13 +1,12 @@
+import { backendUrl } from "@/lib/backend";
+import type { components } from "@/lib/generated/api";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { internalHeaders } from "@/lib/internal-auth";
 import { studyHrefForRecommendation } from "@/lib/learning-route";
 
-const BACKEND_URL =
-  process.env.INTERNAL_API_URL ||
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  "http://backend:8000";
+const BACKEND_URL = backendUrl();
 
 function Unavailable({ courseId }: { courseId: string }) {
   return (
@@ -38,7 +37,7 @@ export default async function LearnPage({ params }: { params: Promise<{ courseId
   if (courseResponse.status === 404) notFound();
   if (!courseResponse.ok) return <Unavailable courseId={courseId} />;
 
-  const course = await courseResponse.json();
+  const course: components["schemas"]["CourseOut"] = await courseResponse.json();
   if (course.status !== "PUBLISHED") redirect(`/courses/${courseId}/workspace`);
 
   let activityResponse: Response;
@@ -53,8 +52,8 @@ export default async function LearnPage({ params }: { params: Promise<{ courseId
   }
   if (!activityResponse.ok || !structureResponse.ok) return <Unavailable courseId={courseId} />;
 
-  const activity = await activityResponse.json();
-  const structure = await structureResponse.json();
+  const activity: components["schemas"]["RecommendationOut"] = await activityResponse.json();
+  const structure: components["schemas"]["StructureOut"] = await structureResponse.json();
   const studyHref = studyHrefForRecommendation(courseId, activity.recommended, structure);
   if (!studyHref) return <Unavailable courseId={courseId} />;
   redirect(studyHref);

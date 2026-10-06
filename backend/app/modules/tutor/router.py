@@ -21,6 +21,8 @@ does not add. The event *sequence and ordering* the mandate requires is
 real; the granularity of the `token` event is coarser than the name
 suggests.
 """
+from app.services.providers import generation_gateway, embedding_gateway, vector_store
+from app.modules.tutor.schemas import LessonContentOut, TutorEvent
 import json
 from typing import Optional
 from uuid import UUID
@@ -49,9 +51,9 @@ router = APIRouter()
 def _service(db: Session = Depends(get_db)) -> TutorService:
     return TutorService(
         db,
-        GeminiGenerationGateway(),
-        GeminiEmbeddingGateway(),
-        PgVectorStore(db),
+        generation_gateway(),
+        embedding_gateway(),
+        vector_store(db),
     )
 
 
@@ -91,7 +93,12 @@ def _stream_events(result):
     )
 
 
-@router.post("/courses/{course_id}/tutor")
+class TutorStream(StreamingResponse):
+    media_type = "text/event-stream"
+
+
+@router.post("/courses/{course_id}/tutor", response_class=TutorStream,
+             responses={200: {"model": TutorEvent, "description": "SSE frames: event name plus JSON data from TutorEvent. Full answer is validated before emission."}})
 def ask_tutor(
     course_id: UUID,
     body: TutorQuestionIn,
@@ -116,7 +123,7 @@ def ask_tutor(
 _VALID_FORMATS = {"concise", "detailed", "worked_example", "analogy", "diagram", "source_view", "quiz_first"}
 
 
-@router.get("/courses/{course_id}/lessons/{lesson_id}/content")
+@router.get("/courses/{course_id}/lessons/{lesson_id}/content", response_model=LessonContentOut)
 def get_lesson_content(
     course_id: UUID,
     lesson_id: UUID,

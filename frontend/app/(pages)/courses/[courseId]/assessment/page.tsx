@@ -1,5 +1,6 @@
 "use client";
 
+import type { components } from "@/lib/generated/api";
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Brain, ArrowLeft, CheckCircle2, ChevronRight, Trophy, Loader2 } from "lucide-react";
@@ -9,13 +10,7 @@ import { Brain, ArrowLeft, CheckCircle2, ChevronRight, Trophy, Loader2 } from "l
 // docstring). Grading happens server-side, per question, via
 // POST /questions/{id}/attempts, not by comparing against a locally-known
 // answer.
-interface Question {
-  id: string;
-  question_type: string;
-  prompt: string;
-  options: string[] | null;
-  difficulty: number;
-}
+type Question = components["schemas"]["QuestionOut"];
 
 export default function AssessmentPage() {
   const params = useParams();

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import type { components } from "@/lib/generated/api";
 import { StateWrapper } from "@/components/StateWrapper";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
 import { Brain, ArrowLeft, Settings, CheckCircle, Loader2 } from "lucide-react";
@@ -14,11 +15,7 @@ import { Brain, ArrowLeft, Settings, CheckCircle, Loader2 } from "lucide-react";
 const FORMATS = ["concise", "detailed", "worked_example", "analogy"] as const;
 type Format = (typeof FORMATS)[number];
 
-interface Citation {
-  claim: string;
-  chunk_id: string;
-  validation_status: string;
-}
+type Citation = components["schemas"]["CitationOut"];
 
 export default function StudyLessonPage() {
   const params = useParams();
@@ -34,8 +31,8 @@ export default function StudyLessonPage() {
   const [isError, setIsError] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const [course, setCourse] = useState<{ title: string } | null>(null);
-  const [lesson, setLesson] = useState<{ id: string; title: string; objective: string; concepts?: { concept_id: string }[] } | null>(null);
+  const [course, setCourse] = useState<components["schemas"]["CourseOut"] | null>(null);
+  const [lesson, setLesson] = useState<components["schemas"]["LessonOut"] | null>(null);
   const [conceptNames, setConceptNames] = useState<Record<string, string>>({});
   const [format, setFormat] = useState<Format>(FORMATS.includes(initialFormat) ? initialFormat : "detailed");
 
@@ -57,7 +54,7 @@ export default function StudyLessonPage() {
       setCourse(await courseRes.json());
 
       if (!structureRes.ok) throw new Error("Failed to load course structure");
-      const structure = await structureRes.json();
+      const structure: components["schemas"]["StructureOut"] = await structureRes.json();
 
       let foundLesson = null;
       for (const mod of structure.modules || []) {
@@ -73,7 +70,7 @@ export default function StudyLessonPage() {
       // Lessons carry concept_id, not a name (curriculum/router.py's
       // _version_out) -- names come from the graph.
       if (graphRes.ok) {
-        const graph = await graphRes.json();
+        const graph: components["schemas"]["GraphOut"] = await graphRes.json();
         const names: Record<string, string> = {};
         for (const c of graph.concepts || []) names[c.id] = c.name;
         setConceptNames(names);
@@ -92,7 +89,7 @@ export default function StudyLessonPage() {
     try {
       const res = await fetch(`/api/v1/courses/${courseId}/lessons/${lessonId}/content?format=${fmt}`);
       if (res.ok) {
-        const data = await res.json();
+        const data: components["schemas"]["LessonContentOut"] = await res.json();
         setContentMarkdown(data.content_markdown);
         setCitations(data.citations || []);
         setGroundingMode(data.grounding_mode);

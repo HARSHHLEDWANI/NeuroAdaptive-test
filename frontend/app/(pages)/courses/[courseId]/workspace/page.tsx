@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import type { components } from "@/lib/generated/api";
 import { StateWrapper } from "@/components/StateWrapper";
 import { Brain, ArrowLeft, Upload, File, Loader2, CheckCircle, RefreshCcw, Pencil, Check, X } from "lucide-react";
 
@@ -18,9 +19,9 @@ export default function WorkspacePage() {
   const [isError, setIsError] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const [course, setCourse] = useState<{ title?: string; status?: string } | null>(null);
-  const [documents, setDocuments] = useState<{ filename: string }[]>([]);
-  const [job, setJob] = useState<{ id: string; status: string; current_stage?: string } | null>(null);
+  const [course, setCourse] = useState<components["schemas"]["CourseOut"] | null>(null);
+  const [documents, setDocuments] = useState<components["schemas"]["DocumentOut"][]>([]);
+  const [job, setJob] = useState<components["schemas"]["JobOut"] | null>(null);
   // Separate from job.status === "RUNNING": that only becomes true once the
   // first poll response comes back. Without this, clicking "Generate
   // Curriculum" gave zero visual feedback for as long as the POST took to
@@ -41,18 +42,7 @@ export default function WorkspacePage() {
   // modules[].lessons[], and a lesson's concepts are {concept_id, role,
   // weight} -- no concept name. Names come from the separate graph
   // endpoint, joined in below via conceptNames.
-  interface LessonOut {
-    id: string;
-    title: string;
-    objective: string | null;
-    concepts: { concept_id: string; role: string; weight: number }[];
-  }
-  interface ModuleOut {
-    id: string;
-    title: string;
-    lessons: LessonOut[];
-  }
-  const [structure, setStructure] = useState<{ modules: ModuleOut[] } | null>(null);
+  const [structure, setStructure] = useState<components["schemas"]["StructureOut"] | null>(null);
   const [conceptNames, setConceptNames] = useState<Record<string, string>>({});
 
   // Lesson renaming: the only edit PUT /courses/{id}/structure supports
@@ -91,12 +81,16 @@ export default function WorkspacePage() {
     }
   }, [courseId]);
 
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => { if (pollingRef.current) clearInterval(pollingRef.current); }, []);
+
   const pollJob = useCallback((jobId: string) => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/v1/jobs/${jobId}`);
         if (!res.ok) throw new Error("Failed to fetch job status");
-        const jobData = await res.json();
+        const jobData: components["schemas"]["JobOut"] = await res.json();
         setJob(jobData);
 
         // Backend job statuses are READY/FAILED/PAUSED (uppercase --
@@ -108,7 +102,7 @@ export default function WorkspacePage() {
           clearInterval(interval);
           setIsGenerating(false);
           fetchStructure();
-        } else if (jobData.status === "FAILED" || jobData.status === "PAUSED") {
+        } else if (jobData.retry_available || jobData.status === "FAILED" || jobData.status === "PAUSED") {
           clearInterval(interval);
           setIsGenerating(false);
           // PAUSED used to fall through here with no message at all -- the
@@ -124,6 +118,7 @@ export default function WorkspacePage() {
         console.error(err);
       }
     }, 2000);
+    pollingRef.current = interval;
   }, [fetchStructure]);
 
   const fetchCourseData = useCallback(async () => {
@@ -158,13 +153,13 @@ export default function WorkspacePage() {
       // was paused (e.g. by a provider quota hit) or still running.
       const jobRes = await fetch(`/api/v1/courses/${courseId}/jobs/latest`);
       if (jobRes.ok) {
-        const latestJob = await jobRes.json();
+        const latestJob: components["schemas"]["JobOut"] | null = await jobRes.json();
         if (latestJob) {
           setJob(latestJob);
-          if (latestJob.status === "RUNNING" || latestJob.status === "PENDING") {
+          if ((latestJob.status === "RUNNING" || latestJob.status === "PENDING") && !latestJob.retry_available) {
             setIsGenerating(true);
             pollJob(latestJob.id);
-          } else if (latestJob.status === "PAUSED" || latestJob.status === "FAILED") {
+          } else if (latestJob.retry_available || latestJob.status === "PAUSED" || latestJob.status === "FAILED") {
             const fallback = latestJob.status === "PAUSED"
               ? "Processing paused. The AI provider may be temporarily unavailable -- try Retry below."
               : "Processing failed. Try again.";
@@ -212,6 +207,10 @@ export default function WorkspacePage() {
         const finalized = await fetch(`/api/v1/courses/${courseId}/documents/finalize/${intent.intent_id}`, { method: "POST" });
         if (!finalized.ok) throw new Error("The uploaded source could not be finalized.");
       } else {
+        const failure = await intentRes.json();
+        if (intentRes.status !== 503 || !String(failure.type).endsWith("/storage-not-configured")) {
+          throw new Error("Private upload could not be authorized. Please retry.");
+        }
         // Existing local development installations use the authenticated
         // legacy route until private S3-compatible storage is configured.
         const formData = new FormData(); formData.append("file", file);
@@ -247,7 +246,7 @@ export default function WorkspacePage() {
         // through to the generic string for those hid the real cause.
         throw new Error(body.detail || body.error || "Failed to start processing");
       }
-      const jobData = await res.json();
+      const jobData: components["schemas"]["JobOut"] = await res.json();
       setJob(jobData);
       pollJob(jobData.id);
     } catch (err) {
@@ -270,7 +269,7 @@ export default function WorkspacePage() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail || body.error || "Failed to retry processing");
       }
-      const jobData = await res.json();
+      const jobData: components["schemas"]["JobOut"] = await res.json();
       setJob(jobData);
       setIsGenerating(true);
       pollJob(job.id);
@@ -364,8 +363,8 @@ export default function WorkspacePage() {
           </ul>
           
           {(() => {
-            const isBusy = isGenerating || isRetrying || job?.status === "RUNNING" || job?.status === "PENDING";
-            const canRetry = !isBusy && job && (job.status === "PAUSED" || job.status === "FAILED");
+            const isBusy = isGenerating || isRetrying || ((job?.status === "RUNNING" || job?.status === "PENDING") && !job?.retry_available);
+            const canRetry = !isBusy && job && job.retry_available;
             return (
               <button
                 onClick={canRetry ? handleRetryJob : handleGenerate}

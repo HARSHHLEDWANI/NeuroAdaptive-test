@@ -16,6 +16,8 @@ or reordering a module is not implemented yet (deferred, see SPRINT_LOG).
 PUT /graph (editing prerequisite edges) is not implemented this phase either;
 GET is, which is what ownership scoping actually needs to be proven for.
 """
+from app.services.providers import generation_gateway, embedding_gateway, vector_store
+from app.modules.curriculum.schemas import StructureOut, GraphOut, PublishedStructureOut
 from typing import List, Optional
 from uuid import UUID
 
@@ -40,7 +42,7 @@ router = APIRouter()
 def _service(db: Session = Depends(get_db)) -> CurriculumService:
     # Lazy clients (see K-14 and its Gemini equivalents): constructing
     # these per request touches no network until a route actually generates.
-    return CurriculumService(db, GeminiGenerationGateway(), GeminiEmbeddingGateway())
+    return CurriculumService(db, generation_gateway(), embedding_gateway())
 
 
 def _version_out(version) -> dict:
@@ -110,7 +112,7 @@ class StructureUpdateIn(BaseModel):
     lesson_renames: List[LessonRename] = Field(default_factory=list)
 
 
-@router.get("/courses/{course_id}/structure")
+@router.get("/courses/{course_id}/structure", response_model=StructureOut)
 def get_structure(
     course_id: UUID,
     user: User = Depends(get_current_user),
@@ -128,7 +130,7 @@ def get_structure(
     return _version_out(version)
 
 
-@router.put("/courses/{course_id}/structure")
+@router.put("/courses/{course_id}/structure", response_model=StructureOut)
 def update_structure(
     course_id: UUID,
     body: StructureUpdateIn,
@@ -150,7 +152,7 @@ def update_structure(
     return _version_out(version)
 
 
-@router.get("/courses/{course_id}/graph")
+@router.get("/courses/{course_id}/graph", response_model=GraphOut)
 def get_graph(
     course_id: UUID,
     version_id: Optional[UUID] = None,
@@ -164,7 +166,7 @@ def get_graph(
     return _graph_out(graph)
 
 
-@router.post("/courses/{course_id}/publish-structure")
+@router.post("/courses/{course_id}/publish-structure", response_model=PublishedStructureOut)
 def publish_structure(
     course_id: UUID,
     version_id: Optional[UUID] = None,

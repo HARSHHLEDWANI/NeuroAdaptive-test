@@ -1,3 +1,5 @@
+from app.modules.retrieval.schemas import ChunkDetail, RetrievalOut
+from app.services.providers import generation_gateway, embedding_gateway, vector_store
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,10 +16,10 @@ router = APIRouter()
 
 
 def _service(db: Session = Depends(get_db)) -> RetrievalService:
-    return RetrievalService(db, GeminiEmbeddingGateway(), PgVectorStore(db))
+    return RetrievalService(db, embedding_gateway(), vector_store(db))
 
 
-@router.get("/courses/{course_id}/retrieval")
+@router.get("/courses/{course_id}/retrieval", response_model=list[RetrievalOut])
 def retrieve(
     course_id: UUID,
     q: str = Query(min_length=1, max_length=1000),
@@ -56,7 +58,7 @@ def retrieve(
     ]
 
 
-@router.get("/courses/{course_id}/chunks/{chunk_id}")
+@router.get("/courses/{course_id}/chunks/{chunk_id}", response_model=ChunkDetail)
 def get_chunk(
     course_id: UUID,
     chunk_id: UUID,

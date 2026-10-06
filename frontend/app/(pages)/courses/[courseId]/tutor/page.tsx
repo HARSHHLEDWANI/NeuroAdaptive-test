@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import type { components } from "@/lib/generated/api";
+type Citation = components["schemas"]["CitationOut"];
 import { Brain, ArrowLeft, Send, Loader2 } from "lucide-react";
 import { MarkdownMessage } from "@/components/MarkdownMessage";
 
@@ -13,7 +15,7 @@ type ChatMessage = {
   // chunk_id is what the backend actually sends per citation event
   // (tutor/router.py's _stream_events) -- previously typed away and
   // dropped, so a citation could never be traced back to its source chunk.
-  citations?: { claim: string; chunk_id: string; validation_status: string }[];
+  citations?: Citation[];
   isInsufficient?: boolean;
 };
 
@@ -77,9 +79,9 @@ export default function TutorPage() {
       const botMessageId = "bot_" + Date.now();
       let botContent = "";
       let isInsufficient = false;
-      let citations: { claim: string; chunk_id: string; validation_status: string }[] = [];
+      let citations: Citation[] = [];
 
-      const appendOrUpdateBotMessage = (content: string, insuff: boolean, cits: { claim: string; chunk_id: string; validation_status: string }[]) => {
+      const appendOrUpdateBotMessage = (content: string, insuff: boolean, cits: Citation[]) => {
         setMessages(prev => {
           const newMessages = [...prev];
           const lastIdx = newMessages.findIndex(m => m.id === botMessageId);

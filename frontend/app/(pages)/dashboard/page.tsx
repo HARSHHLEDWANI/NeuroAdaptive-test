@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import type { components } from "@/lib/generated/api";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, BookOpen, Brain, FileText, LogOut, Plus, RefreshCcw } from "lucide-react";
 import { StateWrapper } from "@/components/StateWrapper";
 
-type JobSummary = { id: string; status: string; current_stage?: string | null };
-type Course = { id: string; title: string; goal?: string | null; status: string; source_count: number; latest_job?: JobSummary | null; latest_review_version_id?: string | null; active_version_id?: string | null };
+type Course = components["schemas"]["CourseOut"];
 
 const statusCopy: Record<string, string> = {
   DRAFT: "Add sources to begin", PROCESSING: "Sources are being processed",
