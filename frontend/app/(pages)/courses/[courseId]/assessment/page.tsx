@@ -142,7 +142,7 @@ export default function AssessmentPage() {
   const total = questions.length;
 
   const handleFinish = () => {
-    router.push(`/dashboard`);
+    router.push(`/courses/${courseId}/learn`);
   };
 
   if (showResults) {
@@ -176,7 +176,7 @@ export default function AssessmentPage() {
             onClick={handleFinish}
             className="w-full bg-black text-white hover:bg-gray-800 border-4 border-black py-4 rounded-2xl font-black text-xl shadow-[6px_6px_0px_0px_rgba(255,159,28,1)] transition-all active:translate-y-1 active:shadow-none"
           >
-            RETURN TO DASHBOARD
+            CONTINUE LEARNING
           </button>
         </div>
       </div>

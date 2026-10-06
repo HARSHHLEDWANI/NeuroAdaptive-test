@@ -39,7 +39,7 @@ from app.modules.tutor.models import GroundingMode
 from app.modules.tutor.service import TutorNotFound, TutorService
 from app.services.embedding.gemini import GeminiEmbeddingGateway
 from app.services.generation.gemini import GeminiGenerationGateway
-from app.services.vectorstore.qdrant_store import QdrantVectorStore
+from app.services.vectorstore.pgvector_store import PgVectorStore
 
 MAX_CONCURRENT_GENERATIONS_PER_USER = 2
 
@@ -47,7 +47,12 @@ router = APIRouter()
 
 
 def _service(db: Session = Depends(get_db)) -> TutorService:
-    return TutorService(db, GeminiGenerationGateway(), GeminiEmbeddingGateway(), QdrantVectorStore())
+    return TutorService(
+        db,
+        GeminiGenerationGateway(),
+        GeminiEmbeddingGateway(),
+        PgVectorStore(db),
+    )
 
 
 class TutorQuestionIn(BaseModel):

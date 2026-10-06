@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { StateWrapper } from "@/components/StateWrapper";
 import { Brain, ArrowLeft, Upload, File, Loader2, CheckCircle, RefreshCcw, Pencil, Check, X } from "lucide-react";
 
 export default function WorkspacePage() {
   const params = useParams();
+  const router = useRouter();
   const courseId = params.courseId as string;
 
   const [activeTab, setActiveTab] = useState<"upload" | "outline" | "diagnostic">("upload");
@@ -17,7 +18,7 @@ export default function WorkspacePage() {
   const [isError, setIsError] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  const [course, setCourse] = useState<{ title?: string } | null>(null);
+  const [course, setCourse] = useState<{ title?: string; status?: string } | null>(null);
   const [documents, setDocuments] = useState<{ filename: string }[]>([]);
   const [job, setJob] = useState<{ id: string; status: string; current_stage?: string } | null>(null);
   // Separate from job.status === "RUNNING": that only becomes true once the
@@ -138,7 +139,12 @@ export default function WorkspacePage() {
         }
         throw new Error("Failed to load course");
       }
-      setCourse(await courseRes.json());
+      const currentCourse = await courseRes.json();
+      if (currentCourse.status === "PUBLISHED") {
+        router.replace(`/courses/${courseId}/learn`);
+        return;
+      }
+      setCourse(currentCourse);
 
       const docsRes = await fetch(`/api/v1/courses/${courseId}/documents`);
       if (docsRes.ok) {
@@ -176,7 +182,7 @@ export default function WorkspacePage() {
     } finally {
       setIsLoading(false);
     }
-  }, [courseId, pollJob, fetchStructure]);
+  }, [courseId, pollJob, fetchStructure, router]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -191,21 +197,33 @@ export default function WorkspacePage() {
     const file = e.target.files[0];
     
     setUploading(true);
-    const formData = new FormData();
-    formData.append("file", file);
-    
     try {
-      const res = await fetch(`/api/v1/courses/${courseId}/documents`, {
-        method: "POST",
-        body: formData,
+      const bytes = await file.arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      const checksum = Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
+      const intentRes = await fetch(`/api/v1/courses/${courseId}/documents/upload-intents`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, size_bytes: file.size, checksum_sha256: checksum, content_type: file.type || null }),
       });
-      if (!res.ok) throw new Error("Upload failed");
+      if (intentRes.ok) {
+        const intent = await intentRes.json();
+        const uploadRes = await fetch(intent.upload_url, { method: "PUT", headers: intent.required_headers, body: file });
+        if (!uploadRes.ok) throw new Error("Private storage rejected the upload.");
+        const finalized = await fetch(`/api/v1/courses/${courseId}/documents/finalize/${intent.intent_id}`, { method: "POST" });
+        if (!finalized.ok) throw new Error("The uploaded source could not be finalized.");
+      } else {
+        // Existing local development installations use the authenticated
+        // legacy route until private S3-compatible storage is configured.
+        const formData = new FormData(); formData.append("file", file);
+        const legacy = await fetch(`/api/v1/courses/${courseId}/documents`, { method: "POST", body: formData });
+        if (!legacy.ok) throw new Error("Upload failed");
+      }
       
       const newDocs = await fetch(`/api/v1/courses/${courseId}/documents`).then(r => r.json());
       setDocuments(newDocs);
     } catch (err) {
       console.error(err);
-      alert("Failed to upload document");
+      setGenerateError("The source could not be uploaded. Check the file type and try again.");
     } finally {
       setUploading(false);
     }
@@ -273,7 +291,7 @@ export default function WorkspacePage() {
       setActiveTab("diagnostic");
     } catch (err) {
       console.error(err);
-      alert("Failed to publish outline");
+      setGenerateError("The course could not be published. Refresh the review and try again.");
     }
   };
 
@@ -304,7 +322,7 @@ export default function WorkspacePage() {
       cancelRenaming();
     } catch (err) {
       console.error(err);
-      alert("Failed to rename lesson");
+      setGenerateError("The lesson name could not be saved. Try again.");
     } finally {
       setIsSavingRename(false);
     }
@@ -468,10 +486,11 @@ export default function WorkspacePage() {
           Take Diagnostic
         </Link>
         <Link
-          href="/dashboard"
+          href={`/courses/${courseId}/learn`}
+          prefetch={false}
           className="bg-gray-100 hover:bg-gray-200 border-2 border-black px-6 py-3 rounded-lg font-bold transition-all"
         >
-          Skip & Go to Dashboard
+          Skip & Start Learning
         </Link>
       </div>
     </div>
