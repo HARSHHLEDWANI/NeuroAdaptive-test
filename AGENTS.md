@@ -68,27 +68,27 @@ unless they are actually present and verified.
 When uncertain, inspect the repository rather than assuming the target design is
 implemented.
 
-## 5. Frozen stack
+## 5. Selected v1 stack (scope revision accepted 2026-10-06)
 Use the selected libraries/providers until an explicit architecture decision
 changes them. Raise substitutions before implementation.
 
-Web: Next.js, TypeScript, Tailwind CSS, shadcn/ui, TanStack Query, React Flow.
+Web: Next.js, TypeScript, Tailwind CSS. Existing component/networking conventions remain for the baseline; design-library adoption is a later UI task.
 
 API: FastAPI, Pydantic, SQLAlchemy, Alembic.
 
 Worker: Celery with Upstash Redis.
 
-Data: Supabase PostgreSQL with pgvector, Auth, and private Storage.
+Data: Supabase PostgreSQL with pgvector and private Storage. Google sign-in currently uses NextAuth and trusted BFF headers; Supabase Auth migration is deferred.
 
-Graph: Neo4j AuraDB as a projection; PostgreSQL remains authoritative.
+Graph: PostgreSQL prerequisite edges. Neo4j projection is deferred from revised v1.
 
-Documents: Docling and RapidOCR, with Gemini multimodal fallback.
+Documents: pypdf and structure-aware text extraction for native-text PDF, TXT, and Markdown. Scans, images, DOCX/PPTX, OCR and multimodal extraction are deferred.
 
-AI: gemini-2.5-flash-lite plus gemini-embedding-001.
+AI: configurable Gemini generation plus gemini-embedding-001. Current configuration is recorded in SYSTEM_ARCHITECTURE.md; model eligibility must be verified before deployment. No automatic provider fallback.
 
-Python execution: self-hosted Judge0, deployed as isolated Railway services.
+Assessments: MCQ and short answer in revised v1. Numeric and Python/Judge0 are deferred; historical code/data remain during baseline cleanup.
 
-Hosting: Vercel for web; Railway Hobby for API, worker, and Judge0.
+Hosting target: Vercel web, Railway API/worker, Supabase database/private storage, Upstash Redis. Hosted deployment is not claimed by local code presence.
 
 Repository: monorepo; Docker Compose for local dependencies.
 
@@ -97,6 +97,7 @@ Area	Primary owner
 Web UI, auth UX, course/learning/progress screens	Member 1
 Document processing, RAG, Gemini, curriculum, question generation	Member 2
 FastAPI domain/API, migrations, jobs, data, graph projection, Judge0, deployment	Member 3
+The 2026-10-06 baseline implementation is authorized across all areas; Member 3 coordinates integration and migration ordering.
 Primary ownership controls public-contract and migration changes. Other members
 may contribute after coordinating with the owner.
 
@@ -131,10 +132,10 @@ Make every Celery stage idempotent using durable job/stage/artifact keys.
 Publish a course version only after validation; partial drafts remain
 diagnostic state.
 
-Build Neo4j projections only from committed PostgreSQL graph versions.
+If Neo4j is reintroduced, build projections only from committed PostgreSQL graph versions.
 
 PostgreSQL is authoritative for product state and prerequisite edges;
-Neo4j is rebuildable projection state; Redis is for job coordination only.
+Any future Neo4j store is rebuildable projection state; Redis is for job coordination only.
 
 AI responses must cross typed Pydantic schemas before entering domain state.
 
@@ -177,7 +178,7 @@ handwritten response types.
 
 PostgreSQL is authoritative for product state and prerequisite edges.
 
-Neo4j is rebuildable projection state.
+Neo4j is deferred; any future projection must be rebuildable.
 
 Redis contains job coordination only.
 
@@ -210,11 +211,11 @@ Binary mastery evidence.
 
 Unrestricted LLM short-answer judgment.
 
-Exact-string numerical grading.
+Numerical grading is deferred from v1; historical behavior is recorded as a conflict.
 
 LLM-estimated difficulty.
 
-Generated Python tests are not pre-executed for quality validation.
+Python assessment is deferred from v1.
 
 Prerequisites warn and influence scoring but never hard-block.
 
@@ -222,7 +223,7 @@ Learners cannot override the next activity.
 
 No target dates, schedules, session fitting, spaced review, or forgetting curve.
 
-Upload validation checks extensions only; no malware scanning in P0.
+Upload validation retains extension, signature, size, and page checks already present. Malware scanning is deferred.
 
 Documents are immutable after course creation.
 
@@ -237,19 +238,16 @@ Test the highest public seam available:
 Pure unit tests: mastery formula, uncertainty, candidate scoring, tie-breaking,
 structural graph checks.
 
-Contract tests: Gemini gateways, Judge0 adapter, Supabase storage/auth, Neo4j
-projection, OpenAPI client generation.
+Contract tests: Gemini gateways, private storage, BFF authentication, OpenAPI client generation.
 
-Integration tests: REST routes through real local PostgreSQL/pgvector, Redis,
-and Neo4j.
+Integration tests: REST routes through disposable PostgreSQL/pgvector and Redis/Celery.
 
 Pipeline tests: fixed files plus deterministic Gemini stubs; assert durable
 stage transitions and idempotency.
 
 Browser tests: upload/poll/review/diagnostic/learn/progress golden path.
 
-End-to-end acceptance: two unseen supported document sets, one native and one
-scanned/visual.
+End-to-end v1 acceptance: two unseen native-text document sets. Baseline checks use synthetic fixtures and cover only implemented paths; the full adaptive loop remains subsequent work.
 
 External services stay behind adapters so tests can run without spending quota.
 Do not assert private methods, exact prompt prose, or incidental UI structure.

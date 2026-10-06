@@ -7,16 +7,9 @@ agent; read `SYSTEM_ARCHITECTURE.md` before any change that touches structure.
 
 ## 1. Branches
 
-Default branch is `main`. Never commit directly to it.
+Integration branch is `develop`; `main` receives green checkpoints. Never commit directly to either during a task.
 
-```
-feature/<short-slug>     new capability
-fix/<short-slug>         defect repair
-chore/<short-slug>       tooling, deps, docs, cleanup
-refactor/<short-slug>    behaviour-preserving restructure
-```
-
-One concern per branch. If a branch needs the word "and" to describe it, split it.
+Use `feat/<task-id>-<short-name>` for task branches. Commit prefixes still describe the change (`fix`, `chore`, `feat`, `refactor`). Preserve published history and merge normally; do not force-push or delete branches during baseline integration.
 
 ## 2. Commits
 
@@ -127,8 +120,9 @@ introduces a new class of infrastructure — a queue, a datastore, a vector inde
 needs agreement before the PR, because it changes the topology in
 `SYSTEM_ARCHITECTURE.md` §15.
 
-Note that `qdrant-client`, `boto3`, and `minio` are already declared but unused;
-prefer wiring these up over adding alternatives.
+The frozen platform uses PostgreSQL/pgvector for embeddings. Do not add a
+second vector database or a production fallback without an approved
+architecture decision.
 
 ## 9. Issue tracking
 

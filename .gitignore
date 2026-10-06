@@ -47,3 +47,13 @@ debug.log
 
 # Generated repository maps; retain locally but never commit them.
 graphify-out/
+
+# Private runtime data and verification artifacts
+backend/var/
+.pytest_cache/
+.coverage*
+htmlcov/
+.ruff_cache/
+*.tsbuildinfo
+playwright-report/
+test-results/
