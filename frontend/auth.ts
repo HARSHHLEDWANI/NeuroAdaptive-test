@@ -1,3 +1,4 @@
+import { backendUrl } from "@/lib/backend";
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { requireInternalToken } from "@/lib/internal-auth";
@@ -11,6 +12,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     ],
     pages: {
         signIn: "/signin",
+        error: "/signin",
     },
     callbacks: {
         // FIXED: Removed the broken jwt/session callbacks that called the phantom endpoint.
@@ -20,9 +22,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
             try {
                 // Make sure to use the server-side environment variable if possible
-                const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+                const apiOrigin = backendUrl();
                 
-                const response = await fetch(`${backendUrl}/api/v1/auth/sync`, {
+                const response = await fetch(`${apiOrigin}/api/v1/auth/sync`, {
                     method: 'POST',
                     headers: { 
                         'Content-Type': 'application/json',
@@ -36,14 +38,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                 });
 
                 if (!response.ok) {
-                    console.error("Backend Sync Failed:", await response.text());
-                    return true; // We return true to allow the frontend login to succeed even if the backend is temporarily down
+                    console.error("Backend user synchronization failed", { status: response.status });
+                    return false; // A session requires a persisted backend identity.
                 }
                 
                 return true;
 
-            } catch (error) {
-                console.error("Backend Sync Error:", error);
+            } catch {
+                console.error("Backend user synchronization unavailable");
                 return false;
             }
         },

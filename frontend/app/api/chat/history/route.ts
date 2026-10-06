@@ -1,3 +1,4 @@
+import { backendUrl } from "@/lib/backend";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { requireInternalToken } from "@/lib/internal-auth";
@@ -17,10 +18,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Session ID is required" }, { status: 400 });
     }
 
-    const apiUrl =
-      process.env.INTERNAL_API_URL ||
-      process.env.NEXT_PUBLIC_API_URL ||
-      "http://backend:8000";
+    const apiUrl = backendUrl();
       
 
     const response = await fetch(`${apiUrl}/api/v1/chat/sessions/${sessionId}/messages`, {

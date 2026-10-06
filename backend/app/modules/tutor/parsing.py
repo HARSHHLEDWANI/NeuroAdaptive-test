@@ -1,4 +1,4 @@
-import json
+from pydantic import BaseModel, Field, StrictBool, StrictStr, ValidationError
 from dataclasses import dataclass
 from typing import List
 
@@ -25,22 +25,23 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
+class ClaimPayload(BaseModel):
+    text: StrictStr = Field(min_length=1)
+    chunk_id: StrictStr = Field(min_length=1)
+
+
+class AnswerPayload(BaseModel):
+    insufficient_evidence: StrictBool = False
+    answer_markdown: StrictStr = ""
+    claims: List[ClaimPayload] = Field(default_factory=list)
+
+
 def parse_tutor_response(raw: str) -> ParsedAnswer:
     try:
-        parsed = json.loads(_strip_code_fence(raw))
-        insufficient = bool(parsed.get("insufficient_evidence", False))
-        answer = str(parsed.get("answer_markdown", ""))
-        raw_claims = parsed.get("claims", [])
-        if not isinstance(raw_claims, list):
-            raise ValueError("claims must be a list")
-    except (json.JSONDecodeError, ValueError, AttributeError) as exc:
-        raise TutorParseError(f"Could not parse tutor response: {raw[:200]!r}") from exc
-
-    claims = []
-    for entry in raw_claims:
-        try:
-            claims.append(Claim(text=str(entry["text"]), chunk_id=str(entry["chunk_id"])))
-        except (KeyError, TypeError):
-            continue  # a malformed individual claim is dropped, not fatal
-
-    return ParsedAnswer(insufficient_evidence=insufficient, answer_markdown=answer, claims=claims)
+        payload = AnswerPayload.model_validate_json(_strip_code_fence(raw))
+        if not payload.insufficient_evidence and payload.answer_markdown.strip() and not payload.claims:
+            raise ValueError("An answer requires claims")
+    except (ValidationError, ValueError) as exc:
+        raise TutorParseError("Tutor response failed schema validation") from exc
+    return ParsedAnswer(payload.insufficient_evidence, payload.answer_markdown,
+        [Claim(text=c.text, chunk_id=c.chunk_id) for c in payload.claims])

@@ -1,3 +1,4 @@
+import { backendUrl } from "@/lib/backend";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth"; // Update this import if your auth is elsewhere
 import { requireInternalToken } from "@/lib/internal-auth";
@@ -46,10 +47,7 @@ export async function POST(req: NextRequest) {
     if (sessionId) backendFormData.append("session_id", sessionId);
     if (file && file.size > 0) backendFormData.append("file", file, file.name);
 
-    const apiUrl =
-      process.env.INTERNAL_API_URL ||
-      process.env.NEXT_PUBLIC_API_URL ||
-      "http://backend:8000";
+    const apiUrl = backendUrl();
 
     const internalKey = process.env.INTERNAL_API_KEY;
 

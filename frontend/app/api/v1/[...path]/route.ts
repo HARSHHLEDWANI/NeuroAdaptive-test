@@ -1,3 +1,4 @@
+import { backendUrl, isBrowserApiPath } from "@/lib/backend";
 /**
  * Catch-all BFF proxy for every `/api/v1/*` call the frontend makes.
  *
@@ -28,10 +29,7 @@ import { Agent } from "undici";
 import { auth } from "@/auth";
 import { requireInternalToken } from "@/lib/internal-auth";
 
-const BACKEND_URL =
-  process.env.INTERNAL_API_URL ||
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  "http://backend:8000";
+const BACKEND_URL = backendUrl();
 
 // undici's default Agent gives up on a slow-to-respond server after a 300s
 // headersTimeout. Most calls here are quick, but the tutor's SSE stream and
@@ -47,6 +45,8 @@ const STRIP_REQUEST_HEADERS = new Set(["host", "connection", "content-length"]);
 const STRIP_RESPONSE_HEADERS = new Set(["content-encoding", "content-length", "connection", "transfer-encoding"]);
 
 async function proxy(req: NextRequest, context: { params: Promise<{ path: string[] }> }) {
+  const { path } = await context.params;
+  if (!isBrowserApiPath(path)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const session = await auth();
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -60,7 +60,6 @@ async function proxy(req: NextRequest, context: { params: Promise<{ path: string
     return NextResponse.json({ error: "Server misconfiguration" }, { status: 500 });
   }
 
-  const { path } = await context.params;
   const targetUrl = `${BACKEND_URL}/api/v1/${path.join("/")}${req.nextUrl.search}`;
 
   const headers = new Headers();

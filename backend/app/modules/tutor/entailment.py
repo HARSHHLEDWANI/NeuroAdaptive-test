@@ -25,8 +25,8 @@ class GeminiEntailmentChecker:
             if text.startswith("```"):
                 text = text.split("\n", 1)[1] if "\n" in text else ""
                 text = text[:-3] if text.endswith("```") else text
-            return bool(json.loads(text.strip())["supported"])
-        except (GenerationError, json.JSONDecodeError, KeyError, ValueError):
+            return json.loads(text.strip())["supported"] is True
+        except (GenerationError, json.JSONDecodeError, KeyError, ValueError, TypeError, AttributeError):
             # An unparseable or failed entailment check is treated as
             # unsupported -- fail closed, never let an unverifiable claim
             # through as if it had passed.

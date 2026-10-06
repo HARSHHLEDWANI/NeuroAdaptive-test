@@ -1,3 +1,4 @@
+import logging
 """
 Neuro-Adaptive Learning Engine
 ================================
@@ -466,7 +467,7 @@ async def generate_adapted_response(
         )
         return response.choices[0].message.content
     except Exception as e:
-        print(f"Groq API Error: {e}")
+        logging.getLogger(__name__).warning("Legacy provider call failed", extra={"error_category": type(e).__name__})
         return "I'm experiencing neural interference right now. Please try again."
 
 

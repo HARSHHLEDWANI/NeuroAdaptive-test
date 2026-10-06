@@ -37,9 +37,8 @@ _UNAVAILABLE_TYPES = {
 # message as long as it is one of ours.
 PROVIDER_ERROR_MESSAGES = {
     ProviderErrorCategory.QUOTA_EXCEEDED: (
-        "The AI provider's usage quota has been used up for now. This "
-        "usually resets within a day -- try again later, or switch to a "
-        "different API key/plan."
+        "The AI provider's configured quota is exhausted. Retry after the "
+        "quota is available, or contact the service operator."
     ),
     ProviderErrorCategory.AUTHENTICATION: (
         "The AI provider rejected the configured credentials. This is a "

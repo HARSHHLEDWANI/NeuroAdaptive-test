@@ -1,3 +1,4 @@
+from app.core.security import get_current_user, verify_internal_api_key
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from app.db.session import get_db
@@ -30,22 +31,6 @@ router = APIRouter()
 # ─────────────────────────────────────────────────────────────────────────────
 # Auth dependencies
 # ─────────────────────────────────────────────────────────────────────────────
-
-async def verify_internal_api_key(x_internal_token: str = Header(...)):
-    if x_internal_token != settings.INTERNAL_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid Internal API Key")
-
-
-async def get_current_user(
-    x_user_email: str = Header(...),
-    x_internal_token: str = Header(...),
-    db: Session = Depends(get_db),
-) -> User:
-    await verify_internal_api_key(x_internal_token)
-    user = db.query(User).filter(User.email == x_user_email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found in DB")
-    return user
 
 
 def _get_or_create_profile(user: User, db: Session) -> UserProfile:
@@ -132,10 +117,9 @@ def override_archetype(
     return {"status": "overridden", "archetype": profile.primary_archetype}
 
 
-@router.post("/update", dependencies=[Depends(verify_internal_api_key)])
-def update_profile(data: ProfileUpdate, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == data.user_email).first()
-    if not user:
+@router.post("/update")
+def update_profile(data: ProfileUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if data.user_email != user.email:
         raise HTTPException(status_code=404, detail="User not found")
 
     profile = user.profile or UserProfile(user_id=user.id)

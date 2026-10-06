@@ -81,7 +81,7 @@ def grade_short_text(question: Question, given: Optional[str], generation: Gener
         if not isinstance(met, list) or len(met) != len(rubric):
             raise ValueError("criteria_met length must match rubric length")
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        raise GradingError(f"Could not parse short-text grading response: {raw[:200]!r}") from exc
+        raise GradingError("Could not parse short-text grading response") from exc
 
     return sum(1 for ok in met if ok) / len(rubric)
 

@@ -1,7 +1,15 @@
 "use client";
 
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { Brain, Zap, Sparkles, Hexagon } from "lucide-react";
+
+function SignInError() {
+  const params = useSearchParams();
+  if (!params.get("error")) return null;
+  return <p role="alert" className="mb-4 text-sm text-red-700">Sign-in could not be completed. The course service may be unavailable. Please try again.</p>;
+}
 
 export default function SignInPage() {
   return (
@@ -42,10 +50,11 @@ export default function SignInPage() {
             Welcome Back
           </h1>
           <p className="text-gray-600 font-medium text-center">
-            Sign in to your Neuro Adaptive Assistant
+            Sign in to NeuroLearn
           </p>
         </div>
 
+        <Suspense fallback={null}><SignInError /></Suspense>
         {/* Google Sign-In Button */}
         <button
           onClick={() => signIn("google", { callbackUrl: "/dashboard" })}

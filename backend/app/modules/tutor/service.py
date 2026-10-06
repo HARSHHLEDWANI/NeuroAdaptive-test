@@ -89,15 +89,25 @@ class TutorService:
         except CourseNotFound:
             raise TutorNotFound(str(course_id))
 
+        context_hint = None
+        if context_lesson_id:
+            from app.modules.curriculum.models import Module, CourseVersion
+            lesson = self.db.query(Lesson).join(Module, Lesson.module_id == Module.id).join(
+                CourseVersion, Module.course_version_id == CourseVersion.id).filter(
+                Lesson.id == context_lesson_id, CourseVersion.course_id == course_id,
+                CourseVersion.owner_id == owner_id).first()
+            if lesson is None:
+                raise TutorNotFound(str(context_lesson_id))
+            context_hint = lesson.title
+        if decision_id:
+            from app.modules.adaptation.models import AdaptationDecision
+            if not self.db.query(AdaptationDecision).filter(AdaptationDecision.id == decision_id,
+                    AdaptationDecision.course_id == course_id, AdaptationDecision.owner_id == owner_id).first():
+                raise TutorNotFound(str(decision_id))
         try:
             hits = self.retrieval.search(course_id, owner_id, question, limit=TOP_N_CHUNKS)
         except RetrievalNotAuthorized:
             raise TutorNotFound(str(course_id))
-
-        context_hint = None
-        if context_lesson_id:
-            lesson = self.db.query(Lesson).filter(Lesson.id == context_lesson_id).first()
-            context_hint = lesson.title if lesson else None
 
         reference_chunks = [
             ReferenceChunk(chunk_id=str(h.id), text=h.text, heading_path=h.heading_path) for h in hits
@@ -220,7 +230,7 @@ class TutorService:
             self.db.query(Lesson)
             .join(Module, Lesson.module_id == Module.id)
             .join(CourseVersion, Module.course_version_id == CourseVersion.id)
-            .filter(Lesson.id == lesson_id, CourseVersion.course_id == course_id)
+            .filter(Lesson.id == lesson_id, CourseVersion.course_id == course_id, CourseVersion.owner_id == owner_id)
             .first()
         )
         if lesson is None:

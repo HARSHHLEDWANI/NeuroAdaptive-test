@@ -8,10 +8,7 @@ from app.core.config import settings
 
 router = APIRouter()
 
-# --- Security Dependency ---
-async def verify_internal_api_key(x_internal_token: str = Header(...)):
-    if x_internal_token != settings.INTERNAL_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
+from app.core.security import verify_internal_api_key
 
 # --- Sync Endpoint ---
 # FIXED: Added the dependency to protect this endpoint from the public internet

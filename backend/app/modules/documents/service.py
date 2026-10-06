@@ -99,6 +99,7 @@ class DocumentService:
         self._validate_metadata(filename, size_bytes, role, checksum_sha256)
         self._check_role_cap(course_id, owner_id, role)
         key = f"courses/{course_id}/{uuid.uuid4().hex}{Path(filename).suffix.lower()}"
+        upload = S3PrivateStorage().create_upload_intent(key, content_type, checksum_sha256)
         intent = StorageUploadIntent(
             course_id=course_id, owner_id=owner_id, object_key=key,
             filename=Path(filename).name, content_type=content_type, role=role,
@@ -108,7 +109,7 @@ class DocumentService:
         self.db.add(intent)
         self.db.commit()
         self.db.refresh(intent)
-        return intent, S3PrivateStorage().create_upload_intent(key, content_type, checksum_sha256)
+        return intent, upload
 
     def finalize_upload(self, course_id: UUID, intent_id: UUID, owner_id: int) -> Document:
         intent = self.db.query(StorageUploadIntent).filter(

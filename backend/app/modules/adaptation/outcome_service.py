@@ -23,7 +23,7 @@ from app.modules.adaptation.models import (
     OutcomeType,
 )
 from app.modules.courses.service import CourseNotFound, CourseService
-from app.modules.mastery.models import QuestionAttempt
+from app.modules.mastery.models import QuestionAttempt, QuestionConcept
 from app.modules.mastery.service import MasteryService
 
 ENGAGEMENT_OUTCOME_TYPES = {
@@ -45,24 +45,24 @@ class AdaptationOutcomeService:
         self.courses = CourseService(db)
         self.mastery = mastery  # only required by record_assessment_outcome
 
-    def _get_owned_decision(self, decision_id: UUID, owner_id: int) -> AdaptationDecision:
+    def _get_owned_decision(self, decision_id: UUID, owner_id: int, course_id: Optional[UUID] = None) -> AdaptationDecision:
         decision = (
             self.db.query(AdaptationDecision)
             .filter(AdaptationDecision.id == decision_id, AdaptationDecision.owner_id == owner_id)
             .first()
         )
-        if decision is None:
+        if decision is None or (course_id is not None and decision.course_id != course_id):
             raise AdaptationOutcomeNotFound(str(decision_id))
         return decision
 
     # -- engagement (never carries a pedagogical-effect field) -----------------
 
     def record_engagement(
-        self, decision_id: UUID, owner_id: int, outcome_type: str, extra: Optional[dict] = None
+        self, decision_id: UUID, owner_id: int, outcome_type: str, extra: Optional[dict] = None, *, course_id: Optional[UUID] = None
     ) -> AdaptationOutcome:
         if outcome_type not in {t.value for t in ENGAGEMENT_OUTCOME_TYPES}:
             raise InvalidOutcome(f"{outcome_type} is not an engagement outcome type.")
-        decision = self._get_owned_decision(decision_id, owner_id)
+        decision = self._get_owned_decision(decision_id, owner_id, course_id)
         outcome = AdaptationOutcome(
             decision_id=decision.id,
             owner_id=owner_id,
@@ -78,10 +78,10 @@ class AdaptationOutcomeService:
 
     # -- self-reported ----------------------------------------------------------
 
-    def record_helpfulness_feedback(self, decision_id: UUID, owner_id: int, rating: int) -> AdaptationOutcome:
+    def record_helpfulness_feedback(self, decision_id: UUID, owner_id: int, rating: int, *, course_id: Optional[UUID] = None) -> AdaptationOutcome:
         if rating not in (-1, 0, 1):
             raise InvalidOutcome("helpfulness rating must be -1, 0, or 1.")
-        decision = self._get_owned_decision(decision_id, owner_id)
+        decision = self._get_owned_decision(decision_id, owner_id, course_id)
         outcome = AdaptationOutcome(
             decision_id=decision.id,
             owner_id=owner_id,
@@ -104,6 +104,7 @@ class AdaptationOutcomeService:
         question_attempt_id: UUID,
         is_transfer_question: bool = False,
         baseline_question_attempt_id: Optional[UUID] = None,
+        *, course_id: Optional[UUID] = None,
     ) -> AdaptationOutcome:
         """
         mastery_delta is computed, never caller-supplied: it is the
@@ -117,7 +118,7 @@ class AdaptationOutcomeService:
         if self.mastery is None:
             raise InvalidOutcome("record_assessment_outcome requires a MasteryService.")
 
-        decision = self._get_owned_decision(decision_id, owner_id)
+        decision = self._get_owned_decision(decision_id, owner_id, course_id)
         concept_id = decision.selected_concept_id
         if concept_id is None:
             raise InvalidOutcome("This decision has no target concept to assess an outcome against.")
@@ -127,8 +128,16 @@ class AdaptationOutcomeService:
             .filter(QuestionAttempt.id == question_attempt_id, QuestionAttempt.owner_id == owner_id)
             .first()
         )
-        if attempt is None:
+        def matches(row):
+            return row is not None and row.course_id == decision.course_id and self.db.query(QuestionConcept).filter(
+                QuestionConcept.question_id == row.question_id, QuestionConcept.concept_id == concept_id).first() is not None
+
+        if not matches(attempt):
             raise AdaptationOutcomeNotFound(str(question_attempt_id))
+        def utc(value):
+            return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+        if utc(attempt.submitted_at) < utc(decision.created_at):
+            raise InvalidOutcome("Assessment evidence must follow the recommendation")
 
         snapshot_mastery = (decision.input_snapshot or {}).get("concept_mastery", {}).get(str(concept_id))
         current_state = self.mastery.get_concept_mastery(owner_id, concept_id)
@@ -144,6 +153,10 @@ class AdaptationOutcomeService:
                 .filter(QuestionAttempt.id == baseline_question_attempt_id, QuestionAttempt.owner_id == owner_id)
                 .first()
             )
+            if not matches(baseline):
+                raise AdaptationOutcomeNotFound(str(baseline_question_attempt_id))
+            if utc(baseline.submitted_at) > utc(attempt.submitted_at):
+                raise InvalidOutcome("Baseline evidence must precede outcome evidence")
             if baseline is not None:
                 hint_usage_delta = attempt.hints_used - baseline.hints_used
                 if attempt.time_taken_seconds is not None and baseline.time_taken_seconds is not None:

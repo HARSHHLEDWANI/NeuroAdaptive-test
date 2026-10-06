@@ -1,3 +1,4 @@
+import secrets
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
@@ -8,7 +9,7 @@ from app.modules.auth.models import User
 
 async def verify_internal_api_key(x_internal_token: str = Header(...)) -> None:
     """Reject any request that does not carry the shared BFF token."""
-    if x_internal_token != settings.INTERNAL_API_KEY:
+    if not secrets.compare_digest(x_internal_token, settings.INTERNAL_API_KEY):
         raise HTTPException(status_code=403, detail="Could not validate credentials")
 
 
@@ -28,4 +29,11 @@ async def get_current_user(
     user = db.query(User).filter(User.email == x_user_email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+async def get_evaluator_user(user: User = Depends(get_current_user)) -> User:
+    allowed = {email.strip().casefold() for email in settings.EVALUATOR_EMAILS.split(",") if email.strip()}
+    if user.email.casefold() not in allowed:
+        raise HTTPException(status_code=404, detail="Resource not found")
     return user

@@ -1,3 +1,4 @@
+from app.core.security import get_current_user
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form
@@ -47,26 +48,10 @@ def _db_role_to_api_role(role: str) -> str:
     return "assistant" if role == "bot" else role
 
 
-async def get_current_user_chat(
-    x_user_email: str = Header(...),
-    x_internal_token: str = Header(...),
-    db: Session = Depends(get_db),
-) -> User:
-    if x_internal_token != settings.INTERNAL_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid Internal API Key")
-    user = db.query(User).filter(User.email == x_user_email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Session management endpoints
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.get("/sessions")
 async def list_sessions(
-    user: User = Depends(get_current_user_chat),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     sessions = (
@@ -84,7 +69,7 @@ async def list_sessions(
 @router.get("/sessions/{session_id}/messages")
 async def get_session_messages(
     session_id: int,
-    user: User = Depends(get_current_user_chat),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     session = (
@@ -116,7 +101,7 @@ async def send_message(
     prompt: str = Form(...),
     session_id: Optional[int] = Form(None),
     file: UploadFile = File(None),
-    user: User = Depends(get_current_user_chat),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if not getattr(settings, "GROQ_API_KEY", None) or "your_groq_api_key" in settings.GROQ_API_KEY:

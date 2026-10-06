@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Dict, Optional
 
 
@@ -65,8 +65,7 @@ class ProfileResponse(BaseModel):
     learning_sessions_count: int = 0
     fslsm: Optional[FSLSMVector] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ArchetypeOverrideRequest(BaseModel):

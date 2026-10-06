@@ -112,7 +112,7 @@ def generate_diagnostic_questions(
         if not isinstance(items, list):
             raise ValueError("questions must be a list")
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
-        raise DiagnosticParseError(f"Could not parse diagnostic response: {raw[:200]!r}") from exc
+        raise DiagnosticParseError("Could not parse diagnostic response") from exc
 
     by_name = {c.name.strip().lower(): c for c in concepts}
     drafts: List[DiagnosticQuestionDraft] = []

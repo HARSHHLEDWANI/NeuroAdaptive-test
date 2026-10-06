@@ -5,6 +5,7 @@ Route naming follows architecture.md's `/courses/{courseId}/...` nesting
 convention (same one curriculum/router.py's docstring already reconciles
 Phase 2 against) rather than inventing a separate top-level resource.
 """
+from app.services.providers import generation_gateway, embedding_gateway, vector_store
 from typing import List, Optional
 from uuid import UUID
 
@@ -36,7 +37,7 @@ MAX_CONCURRENT_GENERATIONS_PER_USER = 2
 def _service(db: Session = Depends(get_db)) -> MasteryService:
     # Lazy clients: constructing these per request touches no network until
     # a route actually generates or grades (curriculum/router.py's pattern).
-    return MasteryService(db, GeminiGenerationGateway(), GeminiEmbeddingGateway())
+    return MasteryService(db, generation_gateway(), embedding_gateway())
 
 
 @router.post("/courses/{course_id}/diagnostic", response_model=List[QuestionOut])
