@@ -1,94 +1,27 @@
-# Neuro Adaptive AI Assistant
+# NeuroLearn
 
-An adaptive learning platform using **FastAPI** (Backend) and **Next.js** (Frontend) with Google OAuth2 authentication.
+Undergraduate CS study from the learner's own notes. Revised v1 scope: frozen-scope.md; actual capabilities: SYSTEM_ARCHITECTURE.md; executed checks: docs/BASELINE_REPORT.md. Lesson-specific assessments and the full adaptive loop are subsequent work.
 
-## 🚀 Getting Started
+## Runtimes and configuration
+Baseline runtimes: Python 3.11 and Node 20, matching Docker/CI. npm is the frontend package manager. Runtime/provider upgrades are separate verified tasks.
 
-To contribute or run this project locally, follow these steps.
+Copy backend/.env.example to backend/.env and frontend/.env.example to frontend/.env.local. Generate distinct SECRET_KEY/NEXTAUTH_SECRET and a shared INTERNAL_API_KEY using `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Fill the same Google OAuth credentials on the Next.js server. Required secrets have no default. Live Gemini is required for normal course generation, never fake runtime output. Storage credentials are optional locally; originals use private backend/var/uploads. Hosted storage requires private Supabase S3 configuration and separate verification.
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+ & npm
-- PostgreSQL (or update config to use SQLite)
+## Docker development
+`docker compose up --build` starts database, Redis, migrations, API, worker and web. Migrations run once and failure blocks API/worker startup. Web: http://localhost:3001; API: http://localhost:8001; PostgreSQL host port 5433, container port 5432. Register Google callback http://localhost:3001/api/auth/callback/google. Existing Compose project/volume identity must be preserved to retain database state. Do not run `down -v` on learner databases.
 
-### 1. Backend Setup
+## Native development
+1. `docker compose up -d db redis`
+2. In backend: `python3.11 -m venv .venv`; activate it; `pip install -c constraints.txt -r requirements.txt -r requirements-dev.txt`.
+3. Native database/Redis URLs use localhost as in the templates. Run `alembic upgrade head`; `uvicorn app.main:app --reload --port 8001`; in a separate shell run `celery -A app.core.celery_app.celery_app worker --loglevel=INFO --concurrency=2`.
+4. In frontend: `npm ci`; `npm run dev`. Native web port is 3000; register http://localhost:3000/api/auth/callback/google. INTERNAL_API_URL=http://127.0.0.1:8001 on the Next.js server.
 
-1. **Navigate to the backend directory:**
-   ```bash
-   cd backend
-   ```
+The tokenizer vocabulary is real, cached during the Docker build; native setup downloads it once with `python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"`. Installation may use network. Tests never substitute a tokenizer or spend AI quota.
 
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Checks
+Backend: `python -m pytest`; `ruff check .`. Frontend: `npm test`; `npm run lint`; `npm run typecheck`; `npm run build`. PostgreSQL/Redis integration instructions and exact results live in docs/BASELINE_REPORT.md. Use disposable databases named neurolearn_test*, never product state.
 
-3. **Configure Environment Variables:**
-   Create a `.env` file in `backend/` based on this template:
-   ```ini
-   SECRET_KEY=generate_a_random_secure_key
-   DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/neuro_db
-   # Get these from Google Cloud Console
-   GOOGLE_CLIENT_ID=your_google_client_id
-   GOOGLE_CLIENT_SECRET=your_google_client_secret
-   FRONTEND_URL=http://localhost:3000
-   ```
+Generate API types with frontend `npm run contracts:generate` after backend requirements are installed and safe configuration is supplied. CI checks schema/type drift. Expected configuration is documented in environment templates; secrets and runtime data are ignored by Git and Docker builds.
 
-4. **Run Database Migrations:**
-   ```bash
-   # Ensure your database exists first (e.g., created via psql)
-   python -m alembic upgrade head
-   ```
-
-5. **Start the Server:**
-   ```bash
-   python main.py
-   ```
-   Server runs at: `http://localhost:8000`
-
----
-
-### 2. Frontend Setup
-
-1. **Navigate to the frontend directory:**
-   ```bash
-   cd frontend
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Configure Environment Variables:**
-   Create a `.env.local` file in `frontend/` based on this template:
-   ```ini
-   # Must match backend env
-   GOOGLE_CLIENT_ID=your_google_client_id
-   GOOGLE_CLIENT_SECRET=your_google_client_secret
-   
-   # NextAuth Config
-   NEXTAUTH_URL=http://localhost:3000
-   NEXTAUTH_SECRET=generate_another_random_secret
-   NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
-   ```
-   > **Note:** Add `http://localhost:3000/api/auth/callback/google` to your Google Cloud Console's **Authorized redirect URIs**.
-
-4. **Start the Development Server:**
-   ```bash
-   npm run dev
-   ```
-   App runs at: `http://localhost:3000`
-
-## 🤝 Contributing
-
-1. **Fork the repository** on GitHub.
-2. **Clone** your fork locally.
-3. Create a **feature branch**: `git checkout -b my-new-feature`.
-4. Commit your changes.
-5. Push to your fork and submit a **Pull Request**.
-
-## 🛠 Tech Stack
-- **Frontend:** Next.js 16, TypeScript, Tailwind CSS, NextAuth.js
-- **Backend:** FastAPI, SQLAlchemy, Alembic, Pydantic
-- **Database:** PostgreSQL
+## Integration
+Task branches use feat/<task-id>-<short-name>. develop is integration, main receives executed green checkpoints. Preserve migrations and learner data. Historical reset/seed tools require an explicit disposable database and opt-in; production generation does not call them.

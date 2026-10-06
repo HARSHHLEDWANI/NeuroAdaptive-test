@@ -1,86 +1,75 @@
 services:
   db:
     image: pgvector/pgvector:0.8.6-pg16
-    container_name: neuro_db
-    restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
       POSTGRES_DB: neuro_db
-    ports:
-      # Host-side 5433: this machine already runs a native PostgreSQL on 5432.
-      # Containers still reach this database at db:5432 over the compose
-      # network, so only external tools (psql, a GUI) use the mapped port.
-      - "5433:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: neuro_backend
-    command: sh wait-for-db.sh
-    ports:
-      - "8001:8000"
-    # Notice: We removed the hardcoded DATABASE_URL and INTERNAL_API_KEY
-    env_file:
-      - ./backend/.env
-    environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-    volumes:
-      - ./backend:/app
-    depends_on:
-      - db
-      - redis
-
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: sh -c 'celery -A app.core.celery_app.celery_app worker --loglevel=INFO --concurrency="$${INDEXING_WORKER_CONCURRENCY_V1}"'
-    env_file:
-      - ./backend/.env
-    environment:
-      # Matches Settings.INDEXING_WORKER_CONCURRENCY_V1; unvalidated default.
-      INDEXING_WORKER_CONCURRENCY_V1: ${INDEXING_WORKER_CONCURRENCY_V1:-2}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-    volumes:
-      # The API's local-development upload fallback writes here. The worker
-      # must read the same originals when private object storage is unset.
-      - ./backend/var/uploads:/app/var/uploads:ro
-    depends_on:
-      - db
-      - redis
-
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d neuro_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
   redis:
     image: redis:7.4-alpine
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: neuro_frontend
-    ports:
-      - "3001:3000"
-    env_file:
-      - ./frontend/.env.local
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  migrate:
+    build: {context: ./backend, target: runtime}
+    command: ["alembic", "upgrade", "head"]
+    env_file: [./backend/.env]
     environment:
-      # It is okay to leave non-secret configuration variables here
-      # OAuth callbacks must use the host-facing port, not the container's
-      # internal port. This overrides the port-3000 value used by `npm run dev`.
-      - NEXTAUTH_URL=http://localhost:3001
-      - INTERNAL_API_URL=http://backend:8000
-      - CHOKIDAR_USEPOLLING=true
-      - WATCHPACK_POLLING=true
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      DATABASE_URL: postgresql://postgres:password@db:5432/neuro_db
     depends_on:
-      - backend
-
+      db: {condition: service_healthy}
+  backend:
+    build: {context: ./backend, target: runtime}
+    command: ["sh", "wait-for-db.sh"]
+    env_file: [./backend/.env]
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/neuro_db
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    ports: ["8001:8000"]
+    volumes: ["./backend:/app"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/db', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+  worker:
+    build: {context: ./backend, target: runtime}
+    command: ["celery", "-A", "app.core.celery_app.celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    env_file: [./backend/.env]
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/neuro_db
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    volumes: ["./backend:/app:ro"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+  frontend:
+    build: ./frontend
+    env_file: [./frontend/.env.local]
+    environment:
+      NEXTAUTH_URL: http://localhost:3001
+      AUTH_URL: http://localhost:3001
+      AUTH_TRUST_HOST: "true"
+      INTERNAL_API_URL: http://backend:8000
+    ports: ["3001:3000"]
+    volumes: ["./frontend:/app", "/app/node_modules", "/app/.next"]
+    depends_on:
+      backend: {condition: service_healthy}
 volumes:
   postgres_data:

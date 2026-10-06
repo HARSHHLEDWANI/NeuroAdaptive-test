@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 # Values that shipped as defaults in earlier revisions of this file. They are
 # public knowledge (they are in the git history), so a deployment that sets one
@@ -48,11 +48,7 @@ class Settings(BaseSettings):
     # Model ids are explicit settings, not literals at the call site, so a
     # model change is configuration rather than a code edit.
     GEMINI_API_KEY: str = ""
-    # gemini-2.5-flash-lite (AGENTS.md §5's frozen choice) was retired for
-    # new callers as of this verification -- confirmed live 2026-08-29, the
-    # API itself names gemini-3.5-flash-lite as the replacement. Same class
-    # of failure as the Groq model retirement (K-12): kept as a setting, not
-    # a literal, so the next retirement is a config change.
+    # Account/model eligibility must be verified before live deployment.
     GEMINI_GENERATION_MODEL: str = "gemini-3.5-flash-lite"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
     # Bounded provider calls keep a stalled upstream request from holding a
@@ -67,6 +63,9 @@ class Settings(BaseSettings):
     # production. Task dispatch is intentionally separate from request work.
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
+    JOB_HEARTBEAT_SECONDS_V1: int = Field(default=15, gt=0)
+    JOB_LEASE_SECONDS_V1: int = Field(default=120, gt=0)
+    EVALUATOR_EMAILS: str = ""  # comma-separated allowlist; closed by default
 
     # Indexed in bounded batches. These versioned values are unvalidated
     # defaults until the benchmark suite records representative measurements.
@@ -102,8 +101,15 @@ class Settings(BaseSettings):
             )
         return v
 
+    @model_validator(mode="after")
+    def validate_worker_lease(self):
+        if self.JOB_LEASE_SECONDS_V1 <= self.JOB_HEARTBEAT_SECONDS_V1:
+            raise ValueError("JOB_LEASE_SECONDS_V1 must exceed JOB_HEARTBEAT_SECONDS_V1")
+        return self
+
     model_config = ConfigDict(
         case_sensitive=True,
+        hide_input_in_errors=True,
         env_file=".env",
         extra="ignore",
     )

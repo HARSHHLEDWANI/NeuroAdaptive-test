@@ -57,3 +57,6 @@ htmlcov/
 *.tsbuildinfo
 playwright-report/
 test-results/
+
+# Local manual-demo source material is not automatically a synthetic fixture.
+demo/

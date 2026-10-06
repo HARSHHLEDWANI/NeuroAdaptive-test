@@ -1,3 +1,14 @@
-node_modules/
-.next/
+node_modules
+.next
+.venv
+venv
+__pycache__
+.pytest_cache
+.ruff_cache
+*.pyc
+*.tsbuildinfo
 .env
+.env.local
+.env.*.local
+var
+.git

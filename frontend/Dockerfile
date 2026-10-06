@@ -8,7 +8,7 @@ ENV WATCHPACK_POLLING=true
 COPY package.json package-lock.json ./
 
 # Install dependencies cleanly
-RUN npm install
+RUN npm ci
 
 # Copy the rest of the frontend code
 COPY . .
