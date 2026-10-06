@@ -26,8 +26,8 @@ class EmbeddingGateway(ABC):
     @property
     @abstractmethod
     def dimensions(self) -> int:
-        """Vector length this gateway produces. Must match the Qdrant
-        collection's configured vector size."""
+        """Vector length this gateway produces. Must match the pgvector
+        column's configured dimensions."""
 
     @abstractmethod
     def embed_texts(self, texts: List[str]) -> List[List[float]]:

@@ -8,16 +8,13 @@ from app.db.session import get_db
 from app.modules.auth.models import User
 from app.modules.retrieval.service import RetrievalNotAuthorized, RetrievalService
 from app.services.embedding.gemini import GeminiEmbeddingGateway
-from app.services.vectorstore.qdrant_store import QdrantVectorStore
+from app.services.vectorstore.pgvector_store import PgVectorStore
 
 router = APIRouter()
 
 
 def _service(db: Session = Depends(get_db)) -> RetrievalService:
-    # Constructing these does not touch the network: both clients are lazy
-    # (see K-14 and its Gemini/Qdrant equivalents), so building them per
-    # request has no cost until a query actually runs.
-    return RetrievalService(db, GeminiEmbeddingGateway(), QdrantVectorStore())
+    return RetrievalService(db, GeminiEmbeddingGateway(), PgVectorStore(db))
 
 
 @router.get("/courses/{course_id}/retrieval")

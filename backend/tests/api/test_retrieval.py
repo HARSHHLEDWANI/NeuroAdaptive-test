@@ -3,7 +3,7 @@ Retrieval isolation tests -- the mandate's headline acceptance criterion for
 this phase: a query returns relevant chunks belonging only to the current
 user's authorized documents, asserted by a test, not by inspection.
 
-Uses FakeEmbeddingGateway and FakeVectorStore (no network, no live Qdrant or
+Uses FakeEmbeddingGateway and FakeVectorStore (no network, no live pgvector or
 Gemini) injected into both the job pipeline and the retrieval endpoint, so
 the full upload -> process -> index -> retrieve loop runs against real code
 paths with fake providers underneath.
@@ -16,7 +16,7 @@ from tests.conftest import auth_headers
 # conftest.py: the default `client` fixture already wires the job runner and
 # the retrieval endpoint to the same fake, offline providers, which is
 # exactly what a pipeline-then-query test needs -- indexing and querying see
-# the same data without a real Gemini key or a running Qdrant instance.
+# the same data without a real Gemini key or a pgvector-enabled database.
 #
 # A local duplicate of this fixture set used to live here and silently
 # shadowed conftest's, so JobService fell back to a real (uninjected)

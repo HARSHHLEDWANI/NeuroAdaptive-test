@@ -12,8 +12,8 @@ from app.core.config import settings
 from app.services.embedding.gateway import EmbeddingError, EmbeddingGateway
 
 # gemini-embedding-001's native output size. Recorded here as a named
-# constant because Qdrant's collection vector size must match it exactly at
-# collection-creation time; there is no per-request negotiation.
+# constant because the PostgreSQL vector column must match it exactly; there
+# is no per-request dimension negotiation.
 GEMINI_EMBEDDING_DIMENSIONS = 3072
 
 # Verified empirically against the live free-tier API on 2026-08-29: a batch

@@ -1,10 +1,10 @@
 """
-An in-memory VectorStore for tests. No network, no Qdrant instance required.
+An in-memory VectorStore for tests. No network or pgvector extension required.
 
 Implements real cosine similarity and a real filter step, so a test against
 this fake is exercising the same *contract* -- ownership filtering happens
-before ranking, not after -- as a test against real Qdrant would, just
-without the running service.
+before ranking, not after -- matching the production PostgreSQL query's
+security contract without requiring a running database.
 """
 import math
 from typing import Dict, List
@@ -50,7 +50,7 @@ class FakeVectorStore(VectorStore):
         store = self._collections.get(collection, {})
 
         # The filter is applied to the candidate set BEFORE scoring, exactly
-        # mirroring what Qdrant's query_filter does server-side -- there is
+        # mirroring the production SQL WHERE clause -- there is
         # no step here where an unfiltered result set exists and gets pared
         # down afterward.
         candidates = [

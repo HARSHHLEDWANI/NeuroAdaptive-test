@@ -1,9 +1,9 @@
 """
-Vector store abstraction over Qdrant.
+Vector search abstraction.
 
-Retrieval code depends on this interface, not on qdrant_client directly, for
-the same reason the embedding gateway is abstracted: swappable provider,
-testable without a running service.
+Production persists vectors in PostgreSQL through pgvector. Retrieval code
+depends on this interface so tests can use a deterministic in-memory adapter
+without database extensions or provider credentials.
 
 The one property every method here must preserve: an owner/course filter is
 part of the query sent to the store, never a filter applied to results after
@@ -16,6 +16,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 from uuid import UUID
+
+CHUNKS_COLLECTION = "course_chunks"
 
 
 @dataclass
@@ -39,8 +41,10 @@ class VectorStoreError(Exception):
 class VectorStore(ABC):
     @abstractmethod
     def ensure_collection(self, name: str, dimensions: int) -> None:
-        """Idempotent: create the collection if absent, no-op if it already
-        exists with a compatible configuration."""
+        """Validate the logical collection and its configured dimensions.
+
+        Production schema creation belongs to Alembic, not request-time code.
+        """
 
     @abstractmethod
     def upsert(self, collection: str, points: List[VectorPoint]) -> None:

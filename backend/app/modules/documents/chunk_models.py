@@ -1,10 +1,13 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, Uuid
+from pgvector.sqlalchemy import VECTOR
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.db.base import Base
+
+EMBEDDING_DIMENSIONS = 3072
 
 
 class Chunk(Base):
@@ -58,8 +61,13 @@ class Chunk(Base):
     # deterministic id.
     extraction_version = Column(Integer, nullable=False, default=1)
 
-    # Set once the chunk is embedded and upserted into Qdrant. Null means the
-    # chunk exists but is not yet retrievable.
+    # PostgreSQL is authoritative for both the source chunk and its embedding.
+    # SQLite uses JSON only for offline tests, where FakeVectorStore supplies
+    # similarity search and no database vector operators are invoked.
+    embedding = Column(
+        VECTOR(EMBEDDING_DIMENSIONS).with_variant(JSON(), "sqlite"),
+        nullable=True,
+    )
     embedding_model = Column(String(64), nullable=True)
     indexed_at = Column(DateTime(timezone=True), nullable=True)
 

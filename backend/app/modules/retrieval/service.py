@@ -28,9 +28,7 @@ from app.modules.documents.chunk_models import Chunk
 from app.modules.documents.models import Document
 from app.modules.retrieval.lexical import search_lexical
 from app.services.embedding.gateway import EmbeddingError, EmbeddingGateway
-from app.services.vectorstore.store import VectorStore, VectorStoreError
-
-CHUNKS_COLLECTION = "course_chunks"
+from app.services.vectorstore.store import CHUNKS_COLLECTION, VectorStore, VectorStoreError
 
 
 @dataclass
