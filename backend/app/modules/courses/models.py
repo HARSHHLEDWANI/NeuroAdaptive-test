@@ -17,7 +17,8 @@ class CourseStatus(str, enum.Enum):
 
     DRAFT = "DRAFT"            # created, sources not finalized
     PROCESSING = "PROCESSING"  # source set finalized, pipeline running
-    READY = "READY"            # validated course version published
+    REVIEW_READY = "REVIEW_READY"  # validated version awaits explicit publish
+    PUBLISHED = "PUBLISHED"        # explicit review action made it learnable
     NEEDS_INPUT = "NEEDS_INPUT"
     FAILED = "FAILED"
 
@@ -51,7 +52,7 @@ class Course(Base):
     # created").
     sources_finalized_at = Column(DateTime(timezone=True), nullable=True)
 
-    # The only field a curriculum regeneration ever changes on this row, and
+    # The only field a curriculum publish action changes on this row, and
     # only via CurriculumService.activate_version() after validation passes.
     # No FK constraint declared here (would create a circular table
     # dependency at migration time between courses and course_versions);

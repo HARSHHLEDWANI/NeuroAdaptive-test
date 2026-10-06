@@ -27,12 +27,13 @@ def create_course(
     user: User = Depends(get_current_user),
     service: CourseService = Depends(_service),
 ):
-    return service.create(
+    course = service.create(
         owner_id=user.id,
         title=body.title,
         goal=body.goal,
         starting_confidence=body.starting_confidence,
     )
+    return service.out(course)
 
 
 @router.get("", response_model=List[CourseOut])
@@ -40,7 +41,7 @@ def list_courses(
     user: User = Depends(get_current_user),
     service: CourseService = Depends(_service),
 ):
-    return service.list_for_owner(user.id)
+    return [service.out(course) for course in service.list_for_owner(user.id)]
 
 
 @router.get("/{course_id}", response_model=CourseOut)
@@ -50,7 +51,7 @@ def get_course(
     service: CourseService = Depends(_service),
 ):
     try:
-        return service.get_owned(course_id, user.id)
+        return service.out(service.get_owned(course_id, user.id))
     except CourseNotFound:
         # 404, not 403: do not confirm that another learner's course exists.
         raise HTTPException(status_code=404, detail="Course not found")
@@ -64,13 +65,14 @@ def update_course(
     service: CourseService = Depends(_service),
 ):
     try:
-        return service.update(
+        course = service.update(
             course_id,
             user.id,
             title=body.title,
             goal=body.goal,
             starting_confidence=body.starting_confidence,
         )
+        return service.out(course)
     except CourseNotFound:
         raise HTTPException(status_code=404, detail="Course not found")
 
@@ -94,7 +96,7 @@ def finalize_sources(
     service: CourseService = Depends(_service),
 ):
     try:
-        return service.finalize_sources(course_id, user.id)
+        return service.out(service.finalize_sources(course_id, user.id))
     except CourseNotFound:
         raise HTTPException(status_code=404, detail="Course not found")
     except SourcesImmutable:

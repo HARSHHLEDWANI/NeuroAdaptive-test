@@ -28,4 +28,8 @@ class CourseOut(BaseModel):
     starting_confidence: Optional[int]
     status: str
     sources_finalized_at: Optional[datetime]
+    source_count: int = 0
+    latest_job: Optional[dict] = None
+    latest_review_version_id: Optional[UUID] = None
+    active_version_id: Optional[UUID] = None
     created_at: Optional[datetime]

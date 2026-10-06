@@ -40,6 +40,47 @@ class CourseService:
             .all()
         )
 
+    def out(self, course: Course) -> dict:
+        """Return the lifecycle summary used by both detail and dashboard.
+
+        This deliberately computes only safe, course-scoped summaries; raw
+        job errors and other users' rows never enter a course listing.
+        """
+        from app.modules.curriculum.models import CourseVersion
+        from app.modules.documents.models import Document
+        from app.modules.jobs.models import ProcessingJob
+
+        latest_job = (
+            self.db.query(ProcessingJob)
+            .filter(ProcessingJob.course_id == course.id, ProcessingJob.owner_id == course.owner_id)
+            .order_by(ProcessingJob.created_at.desc())
+            .first()
+        )
+        review_version = (
+            self.db.query(CourseVersion)
+            .filter(CourseVersion.course_id == course.id, CourseVersion.owner_id == course.owner_id)
+            .order_by(CourseVersion.version_number.desc())
+            .first()
+        )
+        return {
+            "id": course.id,
+            "title": course.title,
+            "goal": course.goal,
+            "starting_confidence": course.starting_confidence,
+            "status": course.status,
+            "sources_finalized_at": course.sources_finalized_at,
+            "source_count": self.db.query(Document).filter(Document.course_id == course.id).count(),
+            "latest_job": None if latest_job is None else {
+                "id": str(latest_job.id),
+                "status": latest_job.status,
+                "current_stage": latest_job.current_stage,
+                "error_category": latest_job.error_category,
+            },
+            "latest_review_version_id": None if review_version is None else review_version.id,
+            "active_version_id": course.active_version_id,
+            "created_at": course.created_at,
+        }
+
     def get_owned(self, course_id: UUID, owner_id: int) -> Course:
         """
         The single accessor every other module must use to resolve a course.

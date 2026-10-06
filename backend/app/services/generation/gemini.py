@@ -41,18 +41,27 @@ class GeminiGenerationGateway(GenerationGateway):
         system_instruction: Optional[str] = None,
         temperature: float = 0.2,
         max_output_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> str:
         genai = self._ensure_configured()
         model = genai.GenerativeModel(
             self._model_name, system_instruction=system_instruction
         )
         config = genai.types.GenerationConfig(
-            temperature=temperature, max_output_tokens=max_output_tokens
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            response_mime_type="application/json" if json_mode else None,
         )
 
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                response = model.generate_content(prompt, generation_config=config)
+                response = model.generate_content(
+                    prompt,
+                    generation_config=config,
+                    request_options={
+                        "timeout": settings.GEMINI_GENERATION_TIMEOUT_SECONDS_V1
+                    },
+                )
                 break
             except Exception as exc:
                 is_last_attempt = attempt == _MAX_RETRIES

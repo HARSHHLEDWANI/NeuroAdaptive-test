@@ -35,9 +35,13 @@ class GenerationGateway(ABC):
         system_instruction: Optional[str] = None,
         temperature: float = 0.2,
         max_output_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> str:
         """
         One completion. Raises GenerationError on provider failure.
+
+        ``json_mode`` asks providers that support it for syntactically valid
+        JSON; callers must still validate its domain schema.
 
         Low default temperature: every call site in this phase wants
         structured, low-variance output (concept lists, edge proposals, JSON

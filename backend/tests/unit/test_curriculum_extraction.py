@@ -5,6 +5,7 @@ import pytest
 
 from app.modules.curriculum.extraction import (
     ExtractionParseError,
+    batch_sections_for_generation,
     group_chunks_into_sections,
     propose_concepts_for_section,
 )
@@ -58,6 +59,21 @@ class TestGrouping:
 
     def test_empty_input_returns_no_groups(self):
         assert group_chunks_into_sections([]) == []
+
+    def test_batches_adjacent_small_sections_to_the_context_limit(self):
+        doc = uuid.uuid4()
+        sections = [
+            [FakeChunk(doc, 0, "A", "a" * 3000)],
+            [FakeChunk(doc, 1, "B", "b" * 3000)],
+            [FakeChunk(doc, 2, "C", "c" * 1)],
+        ]
+
+        batches = batch_sections_for_generation(sections)
+
+        assert [[chunk.heading_path for chunk in batch] for batch in batches] == [
+            ["A", "B"],
+            ["C"],
+        ]
 
 
 class TestConceptProposal:
@@ -143,6 +159,15 @@ class TestConceptProposal:
 
         with pytest.raises(ExtractionParseError):
             propose_concepts_for_section(chunks, gateway, FakeEmbeddingGateway())
+
+    def test_retries_one_malformed_json_response(self):
+        chunks = [FakeChunk(uuid.uuid4(), 0, "H", "text")]
+        gateway = FakeGenerationGateway()
+        gateway.when_prompt_contains("preceding response", '{"concepts": []}')
+        gateway.when_prompt_contains("Identify the distinct", "not json")
+
+        assert propose_concepts_for_section(chunks, gateway, FakeEmbeddingGateway()) == []
+        assert len(gateway.calls) == 2
 
     def test_importance_is_clamped_to_valid_range(self):
         chunks = [FakeChunk(uuid.uuid4(), 0, "H", "text")]

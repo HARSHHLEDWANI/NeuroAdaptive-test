@@ -42,6 +42,7 @@ class FakeGenerationGateway(GenerationGateway):
         system_instruction: Optional[str] = None,
         temperature: float = 0.2,
         max_output_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> str:
         self.calls.append(prompt)
         self.system_instructions.append(system_instruction)

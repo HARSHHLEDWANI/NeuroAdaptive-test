@@ -38,7 +38,7 @@ router = APIRouter()
 
 
 def _service(db: Session = Depends(get_db)) -> CurriculumService:
-    # Lazy clients (see K-14 and its Gemini/Qdrant equivalents): constructing
+    # Lazy clients (see K-14 and its Gemini equivalents): constructing
     # these per request touches no network until a route actually generates.
     return CurriculumService(db, GeminiGenerationGateway(), GeminiEmbeddingGateway())
 

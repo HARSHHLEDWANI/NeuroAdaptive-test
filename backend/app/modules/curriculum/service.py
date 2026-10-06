@@ -27,6 +27,7 @@ from app.modules.courses.service import CourseNotFound, CourseService
 from app.modules.curriculum.carryover import CarryoverCandidate, compute_carryover
 from app.modules.curriculum.edges import ConceptForEdges, EdgeParseError, propose_edges
 from app.modules.curriculum.extraction import (
+    batch_sections_for_generation,
     group_chunks_into_sections,
     propose_concepts_for_section,
 )
@@ -99,7 +100,8 @@ class CurriculumService:
         )
 
         candidates = []
-        for section in group_chunks_into_sections(chunks):
+        section_groups = group_chunks_into_sections(chunks)
+        for section in batch_sections_for_generation(section_groups):
             candidates.extend(
                 propose_concepts_for_section(section, self.generation, self.embeddings)
             )
@@ -296,6 +298,7 @@ class CurriculumService:
             raise VersionNotReady(version.status)
 
         course.active_version_id = version.id
+        course.status = "PUBLISHED"
         version.activated_at = datetime.now(timezone.utc)
         try:
             self.db.commit()
