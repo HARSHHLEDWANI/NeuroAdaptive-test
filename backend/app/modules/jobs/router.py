@@ -1,4 +1,6 @@
+from app.modules.jobs.schemas import JobOut
 from uuid import UUID
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -9,7 +11,7 @@ from app.db.session import get_db
 from app.modules.abuse.service import AbuseControlService
 from app.modules.auth.models import User
 from app.modules.courses.service import CourseNotFound, CourseService
-from app.modules.jobs.service import JobNotFound, JobService
+from app.modules.jobs.service import JobAlreadyActive, JobNotRetryable, JobNotFound, JobService
 from app.modules.jobs.dispatch import CeleryJobDispatcher, JobDispatcher
 
 router = APIRouter()
@@ -24,14 +26,19 @@ def _dispatcher() -> JobDispatcher:
 
 
 def _out(job) -> dict:
+    expiry = job.lease_expires_at
+    if expiry is not None and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    interrupted = job.status == "RUNNING" and (expiry is None or expiry <= datetime.now(timezone.utc))
     return {
         "id": str(job.id),
         "course_id": str(job.course_id),
         "status": job.status,
         "current_stage": job.current_stage,
+        "retry_available": interrupted or job.status in ("PAUSED", "FAILED", "NEEDS_INPUT"),
         "retry_count": job.retry_count,
-        "error_category": job.error_category,
-        "error_detail": job.error_detail,
+        "error_category": "INTERRUPTED" if interrupted else job.error_category,
+        "error_detail": "Worker heartbeat stopped. Retry processing to resume." if interrupted else job.error_detail,
         "stages": [
             {
                 "name": s.name,
@@ -50,7 +57,7 @@ def _out(job) -> dict:
     }
 
 
-@router.post("/courses/{course_id}/process", status_code=202)
+@router.post("/courses/{course_id}/process", status_code=202, response_model=JobOut)
 def start_processing(
     course_id: UUID,
     user: User = Depends(get_current_user),
@@ -89,12 +96,18 @@ def start_processing(
     # mutable source set.
     if not course.sources_are_immutable:
         courses.finalize_sources(course_id, user.id)
-    job = service.create_for_course(course_id, user.id)
-    dispatcher.enqueue(job.id, user.id)
+    try:
+        job = service.create_for_course(course_id, user.id)
+    except JobAlreadyActive:
+        raise HTTPException(status_code=409, detail="This course already has an active processing job")
+    try:
+        dispatcher.enqueue(job.id, user.id)
+    except Exception:
+        job = service.mark_dispatch_failed(job.id, user.id)
     return _out(job)
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", response_model=JobOut)
 def get_job(
     job_id: UUID,
     user: User = Depends(get_current_user),
@@ -106,7 +119,7 @@ def get_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
 
-@router.get("/courses/{course_id}/jobs/latest")
+@router.get("/courses/{course_id}/jobs/latest", response_model=JobOut | None)
 def get_latest_job(
     course_id: UUID,
     user: User = Depends(get_current_user),
@@ -130,7 +143,7 @@ def get_latest_job(
     return _out(job) if job else None
 
 
-@router.post("/jobs/{job_id}/retry", status_code=202)
+@router.post("/jobs/{job_id}/retry", status_code=202, response_model=JobOut)
 def retry_job(
     job_id: UUID,
     user: User = Depends(get_current_user),
@@ -152,15 +165,12 @@ def retry_job(
     except JobNotFound:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status not in ("PAUSED", "FAILED", "NEEDS_INPUT"):
-        raise ProblemDetailException(
-            status_code=409,
-            type_="https://neurolearn.internal/problems/job-not-retryable",
-            title="Job Is Not Retryable",
-            detail="Only paused or failed processing jobs can be retried.",
-        )
-    job.retry_count += 1
-    job.status = "PENDING"
-    db.commit()
-    dispatcher.enqueue(job.id, user.id)
+    try:
+        job = service.prepare_retry(job_id, user.id)
+    except (JobNotRetryable, JobAlreadyActive):
+        raise HTTPException(status_code=409, detail="The job is not retryable or another job is active")
+    try:
+        dispatcher.enqueue(job.id, user.id)
+    except Exception:
+        job = service.mark_dispatch_failed(job.id, user.id)
     return _out(job)

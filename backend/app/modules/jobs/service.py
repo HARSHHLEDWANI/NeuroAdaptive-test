@@ -9,11 +9,16 @@ Stages are idempotent: re-running one replaces its own output rather than
 appending. That is what makes retry safe.
 """
 import logging
-from datetime import datetime, timezone
+from app.services.providers import generation_gateway, embedding_gateway, vector_store
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from sqlalchemy import event, or_, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from threading import Event, Thread
+from app.core.config import settings
 
 from app.core.provider_errors import PROVIDER_ERROR_MESSAGES, classify_provider_error
 from app.modules.courses.models import Course, CourseStatus
@@ -49,6 +54,18 @@ class JobNotFound(Exception):
     """Not found, or not owned by the caller."""
 
 
+class JobAlreadyActive(Exception):
+    """An active job exists for this course."""
+
+
+class JobNotRetryable(Exception):
+    """Only failed, paused, needs-input or expired running jobs can retry."""
+
+
+class LeaseLost(Exception):
+    """Another worker has acquired the job; rollback all stale writes."""
+
+
 class CourseVersionValidationFailed(Exception):
     """generate_version() produced a version that failed validation. The
     stage this is raised from is marked FAILED, with the version's own
@@ -80,21 +97,21 @@ class JobService:
         if self._embeddings is None:
             from app.services.embedding.gemini import GeminiEmbeddingGateway
 
-            self._embeddings = GeminiEmbeddingGateway()
+            self._embeddings = embedding_gateway()
         return self._embeddings
 
     def _get_vectors(self) -> VectorStore:
         if self._vectors is None:
             from app.services.vectorstore.pgvector_store import PgVectorStore
 
-            self._vectors = PgVectorStore(self.db)
+            self._vectors = vector_store(self.db)
         return self._vectors
 
     def _get_generation(self):
         if self._generation is None:
             from app.services.generation.gemini import GeminiGenerationGateway
 
-            self._generation = GeminiGenerationGateway()
+            self._generation = generation_gateway()
         return self._generation
 
     # ── lifecycle ────────────────────────────────────────────────────────────
@@ -145,11 +162,20 @@ class JobService:
         )
 
     def create_for_course(self, course_id: UUID, owner_id: int) -> ProcessingJob:
+        course = self.db.query(Course).filter(Course.id == course_id, Course.owner_id == owner_id).with_for_update().first()
+        if course is None:
+            raise JobNotFound(str(course_id))
+        if self.has_active_job_for_course(course_id):
+            raise JobAlreadyActive()
         job = ProcessingJob(
             course_id=course_id, owner_id=owner_id, status=JobStatus.PENDING.value
         )
         self.db.add(job)
-        self.db.flush()
+        try:
+            self.db.flush()
+        except IntegrityError:
+            self.db.rollback()
+            raise JobAlreadyActive() from None
         for position, stage_name in enumerate(ACTIVE_STAGE_ORDER):
             self.db.add(
                 ProcessingStage(
@@ -173,9 +199,111 @@ class JobService:
             raise JobNotFound(str(job_id))
         return job
 
-    # ── execution ────────────────────────────────────────────────────────────
+    def prepare_retry(self, job_id: UUID, owner_id: int) -> ProcessingJob:
+        job = self.get_owned(job_id, owner_id)
+        self.db.query(Course).filter(Course.id == job.course_id, Course.owner_id == owner_id).with_for_update().one()
+        self.db.refresh(job)
+        expiry = job.lease_expires_at
+        if expiry is not None and expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        expired = job.status == "RUNNING" and (expiry is None or expiry <= _now())
+        if job.status not in ("PAUSED", "FAILED", "NEEDS_INPUT") and not expired:
+            raise JobNotRetryable()
+        if self.db.query(ProcessingJob).filter(ProcessingJob.course_id == job.course_id,
+                ProcessingJob.id != job.id, ProcessingJob.status.in_(["PENDING", "RUNNING"])).first():
+            raise JobAlreadyActive()
+        job.retry_count += 1
+        job.status = "PENDING"
+        job.lease_token = None
+        job.lease_expires_at = None
+        job.finished_at = None
+        job.error_category = None
+        job.error_detail = None
+        for stage in job.stages:
+            if stage.status == "RUNNING":
+                stage.status = "PENDING"
+        self.db.commit()
+        return job
+
+    def mark_dispatch_failed(self, job_id: UUID, owner_id: int) -> ProcessingJob:
+        self.db.rollback()
+        self.db.execute(update(ProcessingJob).where(ProcessingJob.id == job_id,
+            ProcessingJob.owner_id == owner_id, ProcessingJob.status == "PENDING").values(
+                status="PAUSED", error_category="DISPATCH_UNAVAILABLE",
+                error_detail="Processing could not be queued. Please retry when the worker connection is available."))
+        self.db.commit()
+        self.db.expire_all()
+        return self.get_owned(job_id, owner_id)
+
+    def _heartbeat(self, job_id, token, stopped):
+        # SQLite unit tests use one shared connection. Real workers always use
+        # PostgreSQL; their heartbeat owns a separate connection/session.
+        if self.db.get_bind().dialect.name != "postgresql":
+            return
+        bind = self.db.get_bind()
+        while not stopped.wait(settings.JOB_HEARTBEAT_SECONDS_V1):
+            try:
+                with Session(bind=bind) as heartbeat:
+                    result = heartbeat.execute(update(ProcessingJob).where(
+                        ProcessingJob.id == job_id, ProcessingJob.lease_token == token).values(
+                        heartbeat_at=_now(), lease_expires_at=_now() + timedelta(seconds=settings.JOB_LEASE_SECONDS_V1)))
+                    heartbeat.commit()
+                    if result.rowcount != 1:
+                        return
+            except Exception as exc:
+                logger.warning("Worker heartbeat unavailable", extra={"job_id": str(job_id), "error_category": type(exc).__name__})
+                # No blind success: the next artifact transaction checks ownership.
 
     def run(self, job_id: UUID, owner_id: int) -> ProcessingJob:
+        self.get_owned(job_id, owner_id)
+        token = uuid4()
+        now = _now()
+        claimed = self.db.execute(update(ProcessingJob).where(
+            ProcessingJob.id == job_id, ProcessingJob.owner_id == owner_id,
+            or_(ProcessingJob.status == "PENDING", (ProcessingJob.status == "RUNNING") &
+                or_(ProcessingJob.lease_expires_at.is_(None), ProcessingJob.lease_expires_at <= now)),
+        ).values(status="RUNNING", lease_token=token, heartbeat_at=now,
+                 lease_expires_at=now + timedelta(seconds=settings.JOB_LEASE_SECONDS_V1)))
+        self.db.commit()
+        self.db.expire_all()
+        if claimed.rowcount != 1:
+            return self.get_owned(job_id, owner_id)  # duplicate/terminal delivery is inert
+
+        def fence(session, *args):
+            # Conditional UPDATE locks ownership for the entire artifact
+            # transaction. Renewal and takeover serialize on this same row;
+            # after takeover, even a slow old provider result cannot commit.
+            result = session.connection().execute(update(ProcessingJob).where(
+                ProcessingJob.id == job_id, ProcessingJob.lease_token == token).values(
+                lease_expires_at=_now() + timedelta(seconds=settings.JOB_LEASE_SECONDS_V1)))
+            if result.rowcount != 1:
+                raise LeaseLost()
+
+        stopped = Event()
+        thread = Thread(target=self._heartbeat, args=(job_id, token, stopped), daemon=True)
+        event.listen(self.db, "before_flush", fence)
+        event.listen(self.db, "before_commit", fence)
+        thread.start()
+        try:
+            return self._execute(job_id, owner_id)
+        except LeaseLost:
+            self.db.rollback()
+            logger.warning("Stale worker rolled back", extra={"job_id": str(job_id)})
+            self.db.expire_all()
+            return self.get_owned(job_id, owner_id)
+        finally:
+            stopped.set()
+            event.remove(self.db, "before_flush", fence)
+            event.remove(self.db, "before_commit", fence)
+            self.db.rollback()
+            self.db.execute(update(ProcessingJob).where(ProcessingJob.id == job_id,
+                ProcessingJob.lease_token == token).values(lease_token=None, lease_expires_at=None))
+            self.db.commit()
+            # Never block API/worker shutdown waiting on a network heartbeat.
+
+    # ── execution ────────────────────────────────────────────────────────────
+
+    def _execute(self, job_id: UUID, owner_id: int) -> ProcessingJob:
         """
         Walk the pipeline until it completes, needs the learner, or pauses.
 
@@ -195,7 +323,7 @@ class JobService:
         self.db.commit()
 
         for stage in job.stages:
-            if stage.status == StageStatus.SUCCEEDED.value:
+            if stage.status in (StageStatus.SUCCEEDED.value, StageStatus.SKIPPED.value):
                 continue  # idempotent resume
 
             outcome = self._run_stage(job, stage)
@@ -220,15 +348,19 @@ class JobService:
         job.current_stage = stage.name
         self.db.commit()
 
+        if stage.name in ("BUILDING_GRAPH", "GENERATING_STRUCTURE", "VALIDATING_COURSE"):
+            stage.status = StageStatus.SKIPPED.value
+            stage.error_category = "INCLUDED_IN_EXTRACTING_CONCEPTS"
+            stage.finished_at = _now()
+            self.db.commit()
+            return StageStatus.SUCCEEDED
+
         handler = {
             ProcessingStageName.VALIDATING.value: self._stage_validating,
             ProcessingStageName.EXTRACTING.value: self._stage_extracting,
             ProcessingStageName.CHUNKING.value: self._stage_chunking,
             ProcessingStageName.INDEXING.value: self._stage_indexing,
             ProcessingStageName.EXTRACTING_CONCEPTS.value: self._stage_extracting_concepts,
-            ProcessingStageName.BUILDING_GRAPH.value: self._stage_noop,
-            ProcessingStageName.GENERATING_STRUCTURE.value: self._stage_noop,
-            ProcessingStageName.VALIDATING_COURSE.value: self._stage_noop,
         }.get(stage.name)
 
         if handler is None:
@@ -243,6 +375,8 @@ class JobService:
 
         try:
             handler(job)
+        except LeaseLost:
+            raise
         except NoExtractableText as exc:
             stage.status = StageStatus.FAILED.value
             stage.finished_at = _now()
@@ -276,6 +410,11 @@ class JobService:
             logger.error("Job %s paused at %s: %s", job.id, stage.name, type(exc).__name__)
             return StageStatus.PENDING
         except Exception as exc:
+            # A failed SQL flush invalidates the transaction. Re-read committed
+            # state before persisting its safe failure category.
+            self.db.rollback()
+            self.db.refresh(job)
+            self.db.refresh(stage)
             stage.status = StageStatus.FAILED.value
             stage.finished_at = _now()
             stage.error_category = type(exc).__name__
@@ -480,7 +619,7 @@ class JobService:
         resumable stages would mean persisting intermediate state between
         them, which nothing downstream needs yet. The other three stage names
         stay in the pipeline (frozen-scope.md's own vocabulary is preserved)
-        and are recorded as trivially succeeding immediately after. Finer
+        and are explicitly recorded as SKIPPED because they were bundled into this stage. Finer
         per-stage progress within curriculum generation is a scope
         simplification, not an attempt at the mandate's full granularity.
 
@@ -489,17 +628,9 @@ class JobService:
         problem, not a provider outage, so it is not retried automatically.
         """
         service = CurriculumService(self.db, self._get_generation(), self._get_embeddings())
-        version = service.generate_version(job.course_id, job.owner_id)
+        version = service.generate_version(job.course_id, job.owner_id, processing_job_id=job.id)
         if version.status != CourseVersionStatus.READY.value:
-            raise CourseVersionValidationFailed("; ".join(version.validation_errors) or "unknown")
-
-    def _stage_noop(self, job: ProcessingJob) -> None:
-        """BUILDING_GRAPH, GENERATING_STRUCTURE and VALIDATING_COURSE: their
-        work already happened inside _stage_extracting_concepts. Kept as
-        distinct, always-succeeding stages so the frozen pipeline's stage
-        names stay visible in the job's stage list, matching what
-        frozen-scope.md's polling contract names."""
-        return None
+            raise CourseVersionValidationFailed("Course structure failed validation")
 
     def _stage(self, job: ProcessingJob, name: ProcessingStageName) -> ProcessingStage:
         """Resolve this job's already-created durable stage record."""

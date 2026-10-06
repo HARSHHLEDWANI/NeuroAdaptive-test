@@ -1,7 +1,7 @@
 import uuid
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import Index, JSON, Column, DateTime, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -32,6 +32,7 @@ class Chunk(Base):
     """
 
     __tablename__ = "chunks"
+    __table_args__ = (Index("ix_chunks_owner_course", "owner_id", "course_id"),)
 
     id = Column(Uuid, primary_key=True)
     document_id = Column(Uuid, ForeignKey("documents.id"), nullable=False, index=True)

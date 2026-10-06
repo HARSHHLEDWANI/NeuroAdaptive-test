@@ -48,6 +48,8 @@ def validate_course_version(db: Session, version: CourseVersion) -> ValidationRe
     errors: List[str] = []
 
     concepts = db.query(Concept).filter(Concept.course_version_id == version.id).all()
+    if not concepts:
+        errors.append("The course contains no teachable concepts; add readable source material.")
     concept_ids = {c.id for c in concepts}
 
     lesson_ids = [

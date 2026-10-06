@@ -29,6 +29,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -66,6 +67,9 @@ class CourseVersion(Base):
     __tablename__ = "course_versions"
 
     id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    processing_job_id = Column(Uuid, ForeignKey("processing_jobs.id"), nullable=True)
+    processing_retry_count = Column(Integer, nullable=False, default=0)
+    __table_args__ = (UniqueConstraint("processing_job_id", "processing_retry_count", name="uq_course_versions_processing_attempt"),)
     course_id = Column(Uuid, ForeignKey("courses.id"), nullable=False, index=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 

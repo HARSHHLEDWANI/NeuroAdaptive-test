@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
@@ -83,7 +83,7 @@ class CurriculumService:
 
     # -- generation -------------------------------------------------------
 
-    def generate_version(self, course_id: UUID, owner_id: int) -> CourseVersion:
+    def generate_version(self, course_id: UUID, owner_id: int, processing_job_id: Optional[UUID] = None) -> CourseVersion:
         """
         Runs the whole pipeline and persists a new, immutable CourseVersion.
         Never touches course.active_version_id -- see activate_version().
@@ -92,6 +92,26 @@ class CurriculumService:
             course = self.courses.get_owned(course_id, owner_id)
         except CourseNotFound:
             raise CurriculumNotFound(str(course_id))
+
+        processing_retry_count = 0
+        if processing_job_id is not None:
+            from app.modules.jobs.models import ProcessingJob
+            job = self.db.query(ProcessingJob).filter_by(id=processing_job_id, course_id=course_id, owner_id=owner_id).first()
+            if job is None:
+                raise CurriculumNotFound(str(processing_job_id))
+            processing_retry_count = job.retry_count
+            existing = self.db.query(CourseVersion).filter_by(processing_job_id=processing_job_id,
+                course_id=course_id, owner_id=owner_id).order_by(CourseVersion.processing_retry_count.desc()).first()
+            if existing is not None and (existing.status != CourseVersionStatus.FAILED.value or
+                    existing.processing_retry_count == processing_retry_count):
+                # A crash after artifact commit but before validation/stage
+                # completion reuses/revalidates the durable same-job artifact.
+                if existing.status == CourseVersionStatus.DRAFT.value:
+                    result = validate_course_version(self.db, existing)
+                    existing.status = CourseVersionStatus.READY.value if result.is_valid else CourseVersionStatus.FAILED.value
+                    existing.validation_errors = result.errors
+                    self.db.commit()
+                return existing
 
         chunks = (
             self.db.query(Chunk)
@@ -117,6 +137,7 @@ class CurriculumService:
 
         version_number = self._next_version_number(course_id)
         version = CourseVersion(
+            id=uuid4(), processing_job_id=processing_job_id, processing_retry_count=processing_retry_count,
             course_id=course_id,
             owner_id=owner_id,
             version_number=version_number,
@@ -124,13 +145,13 @@ class CurriculumService:
             source_fingerprint=self._source_fingerprint(course_id),
             validation_errors=[],
         )
-        self.db.add(version)
-        self.db.flush()
-
+        # Build provider inputs in memory before the fenced write transaction.
+        # Heartbeat and recovery must not wait on a DB lock during network I/O.
+        pending_sources = []
         concepts: List[Concept] = []
         for item in normalized:
             concept = Concept(
-                course_id=course_id,
+                id=uuid4(), course_id=course_id,
                 course_version_id=version.id,
                 owner_id=owner_id,
                 canonical_key=canonical_key(item.name),
@@ -141,12 +162,10 @@ class CurriculumService:
                 bloom_level=item.bloom_level,
                 embedding=item.embedding,
             )
-            self.db.add(concept)
-            self.db.flush()
             concepts.append(concept)
             for chunk_id in item.source_chunk_ids:
                 if chunk_id in chunk_by_id:
-                    self.db.add(
+                    pending_sources.append(
                         ConceptSource(
                             concept_id=concept.id,
                             chunk_id=chunk_id,
@@ -180,10 +199,16 @@ class CurriculumService:
             logger.warning(
                 "Edge proposal failed for course %s (%d concepts): %s -- "
                 "continuing without a prerequisite graph",
-                course_id, len(concepts), exc,
+                course_id, len(concepts), type(exc).__name__,
             )
             proposed = []
         acyclic, _dropped = resolve_cycles(proposed)
+        self.db.add(version)
+        self.db.flush()  # establish parent before child mappers without a relationship
+        self.db.add_all(concepts)
+        self.db.flush()
+        self.db.add_all(pending_sources)
+        self.db.flush()
         for edge in acyclic:
             self.db.add(
                 ConceptPrerequisite(
@@ -289,7 +314,7 @@ class CurriculumService:
 
         version = (
             self.db.query(CourseVersion)
-            .filter(CourseVersion.id == version_id, CourseVersion.course_id == course_id)
+            .filter(CourseVersion.id == version_id, CourseVersion.course_id == course_id, CourseVersion.owner_id == owner_id)
             .first()
         )
         if version is None:
@@ -323,7 +348,7 @@ class CurriculumService:
         self._get_owned_course(course_id, owner_id)
         version = (
             self.db.query(CourseVersion)
-            .filter(CourseVersion.id == version_id, CourseVersion.course_id == course_id)
+            .filter(CourseVersion.id == version_id, CourseVersion.course_id == course_id, CourseVersion.owner_id == owner_id)
             .first()
         )
         if version is None:
@@ -368,14 +393,17 @@ class CurriculumService:
         if target_version_id is None:
             return GraphView(concepts=[], edges=[])
 
+        if version_id is not None:
+            self.get_version(course_id, owner_id, version_id)
+
         concepts = (
             self.db.query(Concept)
-            .filter(Concept.course_version_id == target_version_id)
+            .filter(Concept.course_version_id == target_version_id, Concept.course_id == course_id, Concept.owner_id == owner_id)
             .all()
         )
         edges = (
             self.db.query(ConceptPrerequisite)
-            .filter(ConceptPrerequisite.course_version_id == target_version_id)
+            .filter(ConceptPrerequisite.course_version_id == target_version_id, ConceptPrerequisite.course_id == course_id)
             .all()
         )
         return GraphView(concepts=concepts, edges=edges)

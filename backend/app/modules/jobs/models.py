@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Uuid, text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -75,6 +75,14 @@ class ProcessingJob(Base):
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
 
     status = Column(String(32), nullable=False, default=JobStatus.PENDING.value, index=True)
+    lease_token = Column(Uuid, nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        Index("uq_processing_jobs_active_course", "course_id", unique=True,
+              postgresql_where=text("status IN ('PENDING','RUNNING')"),
+              sqlite_where=text("status IN ('PENDING','RUNNING')")),
+    )
     current_stage = Column(String(48), nullable=True)
     retry_count = Column(Integer, nullable=False, default=0)
 

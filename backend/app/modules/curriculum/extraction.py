@@ -46,7 +46,7 @@ def group_chunks_into_sections(chunks: List[Chunk]) -> List[List[Chunk]]:
     groups: Dict[str, List[Chunk]] = {}
     order: List[str] = []
     for chunk in sorted(chunks, key=lambda c: (str(c.document_id), c.position)):
-        key = chunk.heading_path or f"__no_heading__:{chunk.id}"
+        key = f"{chunk.document_id}:{chunk.heading_path or chunk.id}"
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -69,7 +69,7 @@ def batch_sections_for_generation(section_groups: List[List[Chunk]]) -> List[Lis
 
     for group in section_groups:
         group_chars = sum(len(chunk.text) for chunk in group)
-        if current and current_chars + group_chars > MAX_SECTION_CHARS:
+        if current and (current_chars + group_chars > MAX_SECTION_CHARS or current[0].document_id != group[0].document_id):
             batches.append(current)
             current = []
             current_chars = 0
