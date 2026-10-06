@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
 # 1. Create the engine (the connection factory)
-engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True, hide_parameters=True)
 
 # 2. Create the SessionLocal class
 # Each request will create its own database session from this factory

@@ -1,3 +1,6 @@
+from app.core.disposable_tools import require_disposable_database
+require_disposable_database()
+
 from app.db.session import SessionLocal
 from app.modules.content.models import Article, Paragraph
 
