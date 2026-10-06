@@ -13,7 +13,7 @@ Copy backend/.env.example to backend/.env and frontend/.env.example to frontend/
 ## Native development
 1. `docker compose up -d db redis`
 2. In backend: `python3.11 -m venv .venv`; activate it; `pip install -c constraints.txt -r requirements.txt -r requirements-dev.txt`.
-3. Native database/Redis URLs use localhost as in the templates. Run `alembic upgrade head`; `uvicorn app.main:app --reload --port 8001`; in a separate shell run `celery -A app.core.celery_app.celery_app worker --loglevel=INFO --concurrency=2`.
+3. Native database/Redis URLs use localhost as in the templates. Run `alembic upgrade head`; `uvicorn app.main:app --reload --no-access-log --port 8001`; in a separate shell run `celery -A app.core.celery_app.celery_app worker --loglevel=INFO --concurrency=2`.
 4. In frontend: `npm ci`; `npm run dev`. Native web port is 3000; register http://localhost:3000/api/auth/callback/google. INTERNAL_API_URL=http://127.0.0.1:8001 on the Next.js server.
 
 The tokenizer vocabulary is real, cached during the Docker build; native setup downloads it once with `python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"`. Installation may use network. Tests never substitute a tokenizer or spend AI quota.

@@ -1,5 +1,7 @@
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+import type { NextConfig } from "next";
+const nextConfig: NextConfig = {
+  // Request URLs can contain learner questions or signed query strings.
+  logging: false,
   transpilePackages: [
     "react-markdown",
     "remark-gfm",

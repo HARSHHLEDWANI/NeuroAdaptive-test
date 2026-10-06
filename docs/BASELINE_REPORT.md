@@ -47,7 +47,7 @@ Unit/adapter: strict boolean and answer parsing; private-storage checksum contra
 - Git: explicit snapshot commits, diff --check, fetch origin, normal local develop integration. No push or history rewrite.
 
 ## 9. Executed results
-- Backend: **634 passed, zero failed, zero skipped**. One upstream Starlette/AnyIO deprecation warning remains; it is not suppressed or represented as a product defect fix.
+- Backend: **635 passed, zero failed, zero skipped**. One upstream Starlette/AnyIO deprecation warning remains; it is not suppressed or represented as a product defect fix.
 - Python dependency consistency and bounded Ruff lint: passed. Broad Python ORM type checking/format conversion is deferred; no claim that it ran.
 - PostgreSQL migration/metadata/HNSW checks, concurrency/fencing/retry tests and real Redis/Celery delivery: passed.
 - OpenAPI snapshot and TypeScript drift checks: passed.
@@ -73,6 +73,8 @@ None outstanding for this authorized baseline. Deployment and pilot work remain 
 
 ## 13. Governing conflicts and handling
 Scope/stack cuts were explicitly authorized in this chat and recorded in the governing documents first. Neo4j/Judge0/OCR/broad formats and Supabase Auth migration are deferred rather than claimed present. Old numerical/math differences remain documented subsequent work. Existing upload signature protection was retained through the accepted scope revision. Historical migrations were neither deleted nor rewritten. Required owner coordination is represented by this session's authorization across baseline areas; integration is local and normal, not a remote merge/publish.
+
+Source mutation/finalization now share a refreshed course-row lock; a real concurrent HTTP regression verifies the source set cannot change after closure. Uvicorn access logs and Next development request logging are disabled so learner query strings are not recorded. Generation/token usage and SDK-internal retries remain partially uninstrumented; existing call counters must not be treated as complete billing measures.
 
 Two independent read-only reviews checked standards and spec. They found explicit graph-version scope and artifact interruption/fencing gaps; these were repaired and covered by regressions. A later retry concern was resolved with job retry epochs while retaining failed diagnostic versions.
 
@@ -187,3 +189,5 @@ Two independent read-only reviews checked standards and spec. They found explici
 - `frontend/pnpm-lock.yaml`
 - `frontend/pnpm-workspace.yaml`
 - `frontend/proxy.ts`
+
+Additional stabilization paths: backend/app/modules/courses/service.py, backend/main.py, frontend/next.config.ts, docs/BASELINE_REPORT.md, implementation-plan.md.
