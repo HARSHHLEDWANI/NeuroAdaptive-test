@@ -65,10 +65,8 @@ class TestPipelineReachesReady:
         course, job = make_course_with_content(
             client, owner.email, "OS Course", DEADLOCK_TEXT
         )
-        # All eight frozen-scope stages are now implemented (Phase 2 added
-        # concept extraction through course validation). fake_generation's
-        # default response yields zero concepts, which validates trivially,
-        # so the whole pipeline reaches READY rather than pausing partway.
+        # Extraction/indexing and nonempty curriculum validation execute;
+        # subordinate bundled curriculum phases are explicitly skipped.
         assert job["status"] == "READY"
         done = {s["name"] for s in job["stages"] if s["status"] == "SUCCEEDED"}
         assert done == {

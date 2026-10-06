@@ -256,9 +256,9 @@ class TestPastedText:
 class TestPipeline:
     def test_runs_through_all_stages_to_ready(self, client, owner, course, db_session):
         """
-        All eight frozen-scope stages are implemented as of Phase 2.
-        fake_generation's default response yields zero concepts, which
-        validates trivially, so the pipeline reaches READY end to end.
+        A nonempty synthetic course validates through real processing seams.
+        Bundled graph/structure/validation phases are explicitly skipped,
+        rather than recorded as independently executed provider stages.
         """
         upload(client, owner.email, course["id"])
         response = client.post(

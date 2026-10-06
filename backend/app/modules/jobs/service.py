@@ -68,8 +68,8 @@ class LeaseLost(Exception):
 
 class CourseVersionValidationFailed(Exception):
     """generate_version() produced a version that failed validation. The
-    stage this is raised from is marked FAILED, with the version's own
-    validation_errors as the detail a human would need -- never swallowed."""
+    stage is marked FAILED with a safe category; detailed validation errors
+    remain in the owned diagnostic version rather than operational logs."""
 
 
 def _now() -> datetime:

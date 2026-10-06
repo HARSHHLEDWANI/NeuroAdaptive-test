@@ -81,7 +81,7 @@ class CourseService:
             "created_at": course.created_at,
         }
 
-    def get_owned(self, course_id: UUID, owner_id: int) -> Course:
+    def get_owned(self, course_id: UUID, owner_id: int, *, lock: bool = False) -> Course:
         """
         The single accessor every other module must use to resolve a course.
 
@@ -89,11 +89,12 @@ class CourseService:
         an unowned Course object exists in memory and could be returned by
         mistake.
         """
-        course = (
-            self.db.query(Course)
-            .filter(Course.id == course_id, Course.owner_id == owner_id)
-            .first()
-        )
+        query = self.db.query(Course).filter(Course.id == course_id, Course.owner_id == owner_id)
+        if lock:
+            # Re-read under the row lock even if an earlier request step
+            # cached this course before another transaction finalized it.
+            query = query.populate_existing().with_for_update()
+        course = query.first()
         if course is None:
             raise CourseNotFound(str(course_id))
         return course
@@ -150,7 +151,7 @@ class CourseService:
         """
         from sqlalchemy.sql import func
 
-        course = self.get_owned(course_id, owner_id)
+        course = self.get_owned(course_id, owner_id, lock=True)
         if course.sources_are_immutable:
             raise SourcesImmutable(str(course_id))
         course.sources_finalized_at = func.now()

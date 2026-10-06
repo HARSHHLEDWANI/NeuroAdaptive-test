@@ -309,3 +309,46 @@ def test_historical_destructive_upgrade_is_blocked_without_data_loss(pg_engine):
         with admin.connect() as db:
             db.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
         admin.dispose()
+
+
+def test_source_upload_and_finalization_serialize_through_http(pg_engine):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db.session import get_db
+    from tests.conftest import auth_headers
+    owner_id, course_id = owned_course(pg_engine)
+    with Session(pg_engine) as db:
+        email = db.get(User, owner_id).email
+    def database():
+        with Session(pg_engine) as db:
+            yield db
+    saved = dict(app.dependency_overrides)
+    app.dependency_overrides[get_db] = database
+    try:
+        with TestClient(app) as client:
+            headers = auth_headers(email)
+            initial = client.post(f"/api/v1/courses/{course_id}/documents", headers=headers,
+                files={"file":("initial.txt",b"An algorithm computes an output using defined steps. "*20,"text/plain")})
+            assert initial.status_code == 201
+            barrier = Barrier(2)
+            def upload():
+                barrier.wait(timeout=5)
+                return client.post(f"/api/v1/courses/{course_id}/documents", headers=headers,
+                    files={"file":("second.txt",b"A graph connects vertices with directed or undirected edges. "*20,"text/plain")}).status_code
+            def finalize():
+                barrier.wait(timeout=5)
+                return client.post(f"/api/v1/courses/{course_id}/finalize-sources", headers=headers).status_code
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                upload_result, finalized = pool.submit(upload), pool.submit(finalize)
+                upload_status, finalize_status = upload_result.result(timeout=10), finalized.result(timeout=10)
+            assert finalize_status == 200
+            assert upload_status in (201,409)
+            with Session(pg_engine) as db:
+                assert db.get(Course, course_id).sources_finalized_at is not None
+                assert db.query(Document).filter_by(course_id=course_id).count() == (2 if upload_status==201 else 1)
+            refused = client.post(f"/api/v1/courses/{course_id}/documents", headers=headers,
+                files={"file":("late.txt",b"Late synthetic source. "*20,"text/plain")})
+            assert refused.status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(saved)

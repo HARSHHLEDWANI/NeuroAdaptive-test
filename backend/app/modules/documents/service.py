@@ -93,7 +93,7 @@ class DocumentService:
         self, course_id: UUID, owner_id: int, filename: str, size_bytes: int,
         checksum_sha256: str, role: str, content_type: Optional[str],
     ):
-        course = self.courses.get_owned(course_id, owner_id)
+        course = self.courses.get_owned(course_id, owner_id, lock=True)
         if course.sources_are_immutable:
             raise SourcesLocked("This course's sources are finalized. Create a new course to use different material.")
         self._validate_metadata(filename, size_bytes, role, checksum_sha256)
@@ -121,9 +121,13 @@ class DocumentService:
         ).first()
         if intent is None:
             raise UploadIntentNotFound(str(intent_id))
-        course = self.courses.get_owned(course_id, owner_id)
+        course = self.courses.get_owned(course_id, owner_id, lock=True)
         if course.sources_are_immutable:
             raise SourcesLocked("This course's sources are finalized. Create a new course to use different material.")
+        self.db.refresh(intent)
+        if intent.finalized:
+            raise UploadIntentNotFound(str(intent_id))
+        self._check_role_cap(course_id, owner_id, intent.role)
         info = S3PrivateStorage().inspect(intent.object_key)
         if info.size_bytes != intent.expected_size_bytes or info.checksum_sha256 != intent.expected_checksum_sha256:
             raise UploadRejected("Uploaded object did not match the authorized file metadata.")
@@ -155,7 +159,7 @@ class DocumentService:
         """Returns (document, created). created=False on a checksum dedup hit,
         so the caller can report 200 rather than 201 and skip re-enqueuing."""
         try:
-            course = self.courses.get_owned(course_id, owner_id)
+            course = self.courses.get_owned(course_id, owner_id, lock=True)
         except CourseNotFound:
             raise DocumentNotFound(str(course_id))
 

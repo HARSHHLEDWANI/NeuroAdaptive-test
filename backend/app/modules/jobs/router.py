@@ -72,10 +72,8 @@ def start_processing(
     except CourseNotFound:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    # T5: checked here, before the job (and the synchronous pipeline run
-    # behind it -- service.run() below executes in-process, not on a queue)
-    # starts, so an over-cap request never gets billed for generation work
-    # only to fail partway through.
+    # Enforce quotas before committing a job. HTTP dispatches IDs only;
+    # extraction and provider calls run in the Celery worker.
     AbuseControlService(db).enforce_course_regeneration_cap(course_id, user.id)
 
     # Concurrency guard: a UI double/triple-click (no loading feedback on
@@ -92,7 +90,7 @@ def start_processing(
         )
 
     # Processing is the immutable-source boundary. This is intentionally in
-    # the route transaction before dispatch: a worker can never observe a
+    # the committed finalization boundary before dispatch: a worker can never observe a
     # mutable source set.
     if not course.sources_are_immutable:
         courses.finalize_sources(course_id, user.id)
