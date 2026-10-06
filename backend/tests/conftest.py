@@ -98,16 +98,16 @@ def client(db_session, fake_embeddings, fake_vectors, fake_generation):
     the job/retrieval service factories overridden to use fake, offline
     embedding and vector-store providers.
 
-    No test in this suite may depend on a reachable Gemini API or Qdrant
-    instance: doing so makes the suite slow, flaky, and dependent on a live
-    API key, and settings.QDRANT_URL's default (the Compose service name)
-    does not resolve outside the container network at all. A test that wants
-    to exercise the real Gemini/Qdrant adapters does so as a narrow,
-    explicitly-marked integration test, not through this fixture.
+    No test in this suite may depend on a reachable Gemini API or database
+    vector extension: doing so makes the suite slow, flaky, and dependent on
+    provider credentials or external infrastructure. A test that exercises
+    the real pgvector adapter does so as a narrow integration test, not
+    through this fixture.
     """
     from app.modules.adaptation.router import _service as adaptation_service_dep
     from app.modules.adaptation.service import AdaptationService
     from app.modules.jobs.router import _service as job_service_dep
+    from app.modules.jobs.router import _dispatcher as job_dispatcher_dep
     from app.modules.jobs.service import JobService
     from app.modules.mastery.router import _service as mastery_service_dep
     from app.modules.mastery.service import MasteryService
@@ -126,6 +126,16 @@ def client(db_session, fake_embeddings, fake_vectors, fake_generation):
     app.dependency_overrides[job_service_dep] = lambda: JobService(
         db_session, embeddings=fake_embeddings, vectors=fake_vectors, generation=fake_generation
     )
+    class InlineJobDispatcher:
+        def enqueue(self, job_id, owner_id):
+            JobService(
+                db_session,
+                embeddings=fake_embeddings,
+                vectors=fake_vectors,
+                generation=fake_generation,
+            ).run(job_id, owner_id)
+
+    app.dependency_overrides[job_dispatcher_dep] = InlineJobDispatcher
     app.dependency_overrides[retrieval_service_dep] = lambda: RetrievalService(
         db_session, fake_embeddings, fake_vectors
     )

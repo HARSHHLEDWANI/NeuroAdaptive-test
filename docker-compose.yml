@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:0.8.6-pg16
     container_name: neuro_db
     restart: always
     environment:
@@ -15,16 +15,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  qdrant:
-    image: qdrant/qdrant:v1.12.4
-    container_name: neuro_qdrant
-    restart: always
-    ports:
-      - "6333:6333"   # REST
-      - "6334:6334"   # gRPC
-    volumes:
-      - qdrant_data:/qdrant/storage
-
   backend:
     build:
       context: ./backend
@@ -36,15 +26,38 @@ services:
     # Notice: We removed the hardcoded DATABASE_URL and INTERNAL_API_KEY
     env_file:
       - ./backend/.env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
     volumes:
       - ./backend:/app
-      # Uploaded originals live on the backend's local disk this sprint rather
-      # than object storage; served only through an authenticated,
-      # owner-checked endpoint. See SPRINT_LOG.md for the substitution.
-      - uploaded_documents:/app/var/uploads
     depends_on:
       - db
-      - qdrant
+      - redis
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: sh -c 'celery -A app.core.celery_app.celery_app worker --loglevel=INFO --concurrency="$${INDEXING_WORKER_CONCURRENCY_V1}"'
+    env_file:
+      - ./backend/.env
+    environment:
+      # Matches Settings.INDEXING_WORKER_CONCURRENCY_V1; unvalidated default.
+      INDEXING_WORKER_CONCURRENCY_V1: ${INDEXING_WORKER_CONCURRENCY_V1:-2}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    volumes:
+      # The API's local-development upload fallback writes here. The worker
+      # must read the same originals when private object storage is unset.
+      - ./backend/var/uploads:/app/var/uploads:ro
+    depends_on:
+      - db
+      - redis
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
 
   frontend:
     build:
@@ -71,5 +84,3 @@ services:
 
 volumes:
   postgres_data:
-  qdrant_data:
-  uploaded_documents:

@@ -55,10 +55,30 @@ class Settings(BaseSettings):
     # a literal, so the next retirement is a config change.
     GEMINI_GENERATION_MODEL: str = "gemini-3.5-flash-lite"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
+    # Bounded provider calls keep a stalled upstream request from holding a
+    # durable processing stage indefinitely. This is an unvalidated V1
+    # operational default and can be tuned through deployment configuration.
+    GEMINI_GENERATION_TIMEOUT_SECONDS_V1: int = 45
+    # One corrected re-prompt is allowed for malformed structured extraction
+    # output; a second malformed result abstains rather than inventing data.
+    CONCEPT_EXTRACTION_MAX_GENERATION_ATTEMPTS_V1: int = 2
 
-    # Qdrant. Defaults to the compose service name, which only resolves
-    # inside the compose network; local dev outside Docker overrides this.
-    QDRANT_URL: str = "http://qdrant:6333"
+    # Worker / queue. Redis is local in Compose and Upstash-compatible in
+    # production. Task dispatch is intentionally separate from request work.
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
+
+    # Indexed in bounded batches. These versioned values are unvalidated
+    # defaults until the benchmark suite records representative measurements.
+    INDEXING_BATCH_SIZE_V1: int = 10
+    INDEXING_WORKER_CONCURRENCY_V1: int = 2
+
+    # Private S3-compatible storage (Supabase Storage production endpoint).
+    STORAGE_BUCKET: str = "neurolearn-sources"
+    STORAGE_S3_ENDPOINT: str = ""
+    STORAGE_S3_ACCESS_KEY: str = ""
+    STORAGE_S3_SECRET_KEY: str = ""
+    STORAGE_SIGNED_URL_TTL_SECONDS_V1: int = 900
 
     @field_validator("INTERNAL_API_KEY", "SECRET_KEY")
     @classmethod

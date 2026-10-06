@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.problem_details import ProblemDetailException
@@ -10,12 +10,17 @@ from app.modules.abuse.service import AbuseControlService
 from app.modules.auth.models import User
 from app.modules.courses.service import CourseNotFound, CourseService
 from app.modules.jobs.service import JobNotFound, JobService
+from app.modules.jobs.dispatch import CeleryJobDispatcher, JobDispatcher
 
 router = APIRouter()
 
 
 def _service(db: Session = Depends(get_db)) -> JobService:
     return JobService(db)
+
+
+def _dispatcher() -> JobDispatcher:
+    return CeleryJobDispatcher()
 
 
 def _out(job) -> dict:
@@ -34,6 +39,11 @@ def _out(job) -> dict:
                 "status": s.status,
                 "attempts": s.attempts,
                 "error_category": s.error_category,
+                "input_count": s.input_count,
+                "output_count": s.output_count,
+                "provider_call_count": s.provider_call_count,
+                "started_at": s.started_at,
+                "finished_at": s.finished_at,
             }
             for s in job.stages
         ],
@@ -43,14 +53,15 @@ def _out(job) -> dict:
 @router.post("/courses/{course_id}/process", status_code=202)
 def start_processing(
     course_id: UUID,
-    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     service: JobService = Depends(_service),
     db: Session = Depends(get_db),
+    dispatcher: JobDispatcher = Depends(_dispatcher),
 ):
     """Create and run a processing job for a course the caller owns."""
+    courses = CourseService(db)
     try:
-        CourseService(db).get_owned(course_id, user.id)
+        course = courses.get_owned(course_id, user.id)
     except CourseNotFound:
         raise HTTPException(status_code=404, detail="Course not found")
 
@@ -73,8 +84,13 @@ def start_processing(
             detail="This course is already being processed. Wait for it to finish before starting another run.",
         )
 
+    # Processing is the immutable-source boundary. This is intentionally in
+    # the route transaction before dispatch: a worker can never observe a
+    # mutable source set.
+    if not course.sources_are_immutable:
+        courses.finalize_sources(course_id, user.id)
     job = service.create_for_course(course_id, user.id)
-    background_tasks.add_task(service.run, job.id, user.id)
+    dispatcher.enqueue(job.id, user.id)
     return _out(job)
 
 
@@ -117,10 +133,10 @@ def get_latest_job(
 @router.post("/jobs/{job_id}/retry", status_code=202)
 def retry_job(
     job_id: UUID,
-    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     service: JobService = Depends(_service),
     db: Session = Depends(get_db),
+    dispatcher: JobDispatcher = Depends(_dispatcher),
 ):
     """
     Resume a paused or failed job. Stages that already succeeded are not
@@ -136,7 +152,15 @@ def retry_job(
     except JobNotFound:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    if job.status not in ("PAUSED", "FAILED", "NEEDS_INPUT"):
+        raise ProblemDetailException(
+            status_code=409,
+            type_="https://neurolearn.internal/problems/job-not-retryable",
+            title="Job Is Not Retryable",
+            detail="Only paused or failed processing jobs can be retried.",
+        )
     job.retry_count += 1
+    job.status = "PENDING"
     db.commit()
-    background_tasks.add_task(service.run, job.id, user.id)
+    dispatcher.enqueue(job.id, user.id)
     return _out(job)

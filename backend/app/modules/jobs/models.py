@@ -64,10 +64,8 @@ class ProcessingJob(Base):
     """
     One run of the course processing pipeline.
 
-    Run as an in-process background task this sprint rather than through
-    Celery/Redis. The job and stage rows are what make progress real and
-    resumable regardless of which executor runs them, so the durable record is
-    identical to what a queued worker would write.
+    Dispatched after commit to a Celery worker. The durable job and stage rows
+    make progress observable and resumable across process restarts.
     """
 
     __tablename__ = "processing_jobs"
@@ -83,7 +81,6 @@ class ProcessingJob(Base):
     # Category only, never provider text or document content (AGENTS.md §1,
     # frozen-scope.md data-lifecycle rules on logging).
     error_category = Column(String(64), nullable=True)
-
     # T2 (Phase 6): unlike error_category, this MAY hold a message -- but
     # only ever our own authored, human-facing text: NoExtractableText's
     # strings (e.g. "This PDF is password-protected...", "This PDF has 750
@@ -119,6 +116,11 @@ class ProcessingStage(Base):
     status = Column(String(16), nullable=False, default=StageStatus.PENDING.value)
     attempts = Column(Integer, nullable=False, default=0)
     error_category = Column(String(64), nullable=True)
+    # Safe durable telemetry. Values are counts/timing only: no source text,
+    # prompts, answers, or provider payloads are recorded here.
+    input_count = Column(Integer, nullable=False, default=0)
+    output_count = Column(Integer, nullable=False, default=0)
+    provider_call_count = Column(Integer, nullable=False, default=0)
 
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)

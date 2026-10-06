@@ -1,16 +1,14 @@
 """
-Processing job orchestration.
+Processing job orchestration, invoked by the Celery worker.
 
-Runs the pipeline in-process rather than through Celery (frozen substitution),
-but writes the same durable job/stage records a queued worker would, so
-progress is real and the executor can be swapped later without changing the
-observable contract.
+The HTTP layer only commits a durable job then dispatches its ID. This service
+is deliberately independent of Celery so worker retries and offline tests use
+the identical stage/idempotency implementation.
 
 Stages are idempotent: re-running one replaces its own output rather than
 appending. That is what makes retry safe.
 """
 import logging
-import time
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
@@ -40,10 +38,9 @@ from app.modules.jobs.models import (
 )
 from app.modules.curriculum.models import CourseVersionStatus
 from app.modules.curriculum.service import CurriculumService
-from app.modules.retrieval.service import CHUNKS_COLLECTION
 from app.services.embedding.gateway import EmbeddingError, EmbeddingGateway
 from app.services.generation.gateway import GenerationError, GenerationGateway
-from app.services.vectorstore.store import VectorPoint, VectorStore, VectorStoreError
+from app.services.vectorstore.store import CHUNKS_COLLECTION, VectorPoint, VectorStore, VectorStoreError
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +85,9 @@ class JobService:
 
     def _get_vectors(self) -> VectorStore:
         if self._vectors is None:
-            from app.services.vectorstore.qdrant_store import QdrantVectorStore
+            from app.services.vectorstore.pgvector_store import PgVectorStore
 
-            self._vectors = QdrantVectorStore()
+            self._vectors = PgVectorStore(self.db)
         return self._vectors
 
     def _get_generation(self):
@@ -191,6 +188,10 @@ class JobService:
         job = self.get_owned(job_id, owner_id)
         job.status = JobStatus.RUNNING.value
         job.started_at = job.started_at or _now()
+        # A manually retried job must put the course back into the same
+        # visible lifecycle state as a newly dispatched job.  Otherwise the
+        # dashboard can still say FAILED while its durable job is running.
+        self._set_course_status(job, CourseStatus.PROCESSING)
         self.db.commit()
 
         for stage in job.stages:
@@ -205,7 +206,9 @@ class JobService:
         job.status = JobStatus.READY.value
         job.current_stage = None
         job.finished_at = _now()
-        self._set_course_status(job, CourseStatus.READY)
+        # A successful pipeline makes a validated version reviewable. It is
+        # deliberately not learnable until the learner explicitly publishes.
+        self._set_course_status(job, CourseStatus.REVIEW_READY)
         self.db.commit()
         return job
 
@@ -302,6 +305,8 @@ class JobService:
         documents = self._documents(job)
         if not documents:
             raise ValueError("Course has no documents to process")
+        self._stage(job, ProcessingStageName.VALIDATING).input_count = len(documents)
+        self._stage(job, ProcessingStageName.VALIDATING).output_count = len(documents)
 
     def _stage_extracting(self, job: ProcessingJob) -> None:
         """
@@ -310,7 +315,9 @@ class JobService:
         A document with no extractable text sets NEEDS_INPUT with a
         learner-facing reason rather than producing silent empty output.
         """
-        for document in self._documents(job):
+        documents = self._documents(job)
+        page_count = 0
+        for document in documents:
             document.status = DocumentStatus.EXTRACTING.value
             self.db.commit()
 
@@ -329,9 +336,13 @@ class JobService:
                 raise
 
             document.page_count = extracted.page_count
+            page_count += extracted.page_count
             document.status = DocumentStatus.EXTRACTED.value
             document.needs_input_reason = None
             self.db.commit()
+        stage = self._stage(job, ProcessingStageName.EXTRACTING)
+        stage.input_count = len(documents)
+        stage.output_count = page_count
 
     def _stage_chunking(self, job: ProcessingJob) -> None:
         """
@@ -346,10 +357,13 @@ class JobService:
         Only stale rows (positions the current run no longer produces, e.g.
         because the source shrank) are removed.
         """
-        for document in self._documents(job):
+        documents = self._documents(job)
+        output_count = 0
+        for document in documents:
             raw = self.documents.read_bytes(document)
             extracted = extract(raw, document.filename)
             proposed_chunks = chunk_document(extracted)
+            output_count += len(proposed_chunks)
 
             live_ids = set()
             for proposed in proposed_chunks:
@@ -378,6 +392,7 @@ class JobService:
                 existing.extraction_version = EXTRACTION_VERSION
                 # A rewritten chunk is no longer known-good in the index
                 # until the INDEXING stage re-embeds it.
+                existing.embedding = None
                 existing.embedding_model = None
                 existing.indexed_at = None
 
@@ -388,11 +403,14 @@ class JobService:
             ).delete(synchronize_session=False)
 
             self.db.commit()
+        stage = self._stage(job, ProcessingStageName.CHUNKING)
+        stage.input_count = len(documents)
+        stage.output_count = output_count
 
     def _stage_indexing(self, job: ProcessingJob) -> None:
         """
-        Embed every not-yet-indexed chunk and upsert it into the vector
-        store, keyed by the chunk's own id -- re-indexing after a reprocess
+        Embed every not-yet-indexed chunk and persist it in PostgreSQL,
+        keyed by the chunk's own id -- re-indexing after a reprocess
         overwrites the same point rather than creating a second one.
 
         Item 7's requirement that each chunk's heading path be prepended
@@ -416,16 +434,12 @@ class JobService:
         if not pending:
             return
 
-        # Matches GeminiEmbeddingGateway._MAX_BATCH_SIZE, tuned against the
-        # live free-tier API (see that module). A different gateway may
-        # tolerate a larger batch; this stage does not assume one.
-        batch_size = 10
-        for index, start in enumerate(range(0, len(pending), batch_size)):
-            if index > 0:
-                # A short pause between batches, independent of the
-                # gateway's own retry-on-rate-limit: spreads requests out so
-                # the retry path is needed less often, not a substitute for it.
-                time.sleep(1)
+        # Configured, bounded batches avoid deliberate serial sleeps. This is
+        # an unvalidated V1 default; benchmark results, not intuition, must
+        # determine future values.
+        from app.core.config import settings
+        batch_size = settings.INDEXING_BATCH_SIZE_V1
+        for start in range(0, len(pending), batch_size):
             batch = pending[start : start + batch_size]
             texts_to_embed = [
                 f"{c.heading_path}\n\n{c.text}" if c.heading_path else c.text for c in batch
@@ -450,6 +464,10 @@ class JobService:
                 chunk.embedding_model = embeddings.model_name
                 chunk.indexed_at = _now()
             self.db.commit()
+        stage = self._stage(job, ProcessingStageName.INDEXING)
+        stage.input_count = len(pending)
+        stage.output_count = len(pending)
+        stage.provider_call_count = (len(pending) + batch_size - 1) // batch_size
 
     def _stage_extracting_concepts(self, job: ProcessingJob) -> None:
         """
@@ -482,6 +500,10 @@ class JobService:
         names stay visible in the job's stage list, matching what
         frozen-scope.md's polling contract names."""
         return None
+
+    def _stage(self, job: ProcessingJob, name: ProcessingStageName) -> ProcessingStage:
+        """Resolve this job's already-created durable stage record."""
+        return next(stage for stage in job.stages if stage.name == name.value)
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
