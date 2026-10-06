@@ -240,19 +240,19 @@ class TestPastedText:
         assert response.status_code == 422  # pydantic min_length, before the service layer
 
     def test_pasted_text_respects_the_study_file_cap(self, client, owner, course):
-        for i in range(2):
+        for i in range(5):
             response = client.post(
                 self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
                 json={"title": f"Note {i}", "text": f"{PROSE} unique-{i}"},
                 headers=auth_headers(owner.email),
             )
             assert response.status_code == 201
-        third = client.post(
+        sixth = client.post(
             self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
             json={"title": "Note 3", "text": f"{PROSE} unique-3"},
             headers=auth_headers(owner.email),
         )
-        assert third.status_code == 400
+        assert sixth.status_code == 400
 
 
 class TestPipeline:

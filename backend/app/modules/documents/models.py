@@ -1,7 +1,7 @@
 import enum
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Uuid
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -34,10 +34,9 @@ class Document(Base):
     """
     One uploaded source file belonging to a course.
 
-    storage_path points at backend-local disk for this sprint rather than
-    object storage: boto3/minio are declared dependencies with no running
-    service, and the substitution is recorded in SPRINT_LOG.md. The file is
-    only ever served through an authenticated, owner-checked endpoint.
+    storage_key identifies the private object-store original. storage_path is
+    retained only to read existing local-development rows created before the
+    private-storage migration.
     """
 
     __tablename__ = "documents"
@@ -57,6 +56,7 @@ class Document(Base):
     source_kind = Column(String(16), nullable=False, default=DocumentSourceKind.UPLOAD.value)
 
     storage_path = Column(String(512), nullable=False)
+    storage_key = Column(String(512), nullable=True, unique=True)
     size_bytes = Column(Integer, nullable=False, default=0)
     page_count = Column(Integer, nullable=True)
 
@@ -71,3 +71,22 @@ class Document(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     course = relationship("Course", back_populates="documents")
+
+
+class StorageUploadIntent(Base):
+    """A one-use, owner-scoped authorization to finalize a private upload."""
+
+    __tablename__ = "storage_upload_intents"
+
+    id = Column(Uuid, primary_key=True, default=uuid.uuid4)
+    course_id = Column(Uuid, ForeignKey("courses.id"), nullable=False, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    object_key = Column(String(512), nullable=False, unique=True)
+    filename = Column(String(255), nullable=False)
+    content_type = Column(String(128), nullable=True)
+    role = Column(String(16), nullable=False)
+    expected_checksum_sha256 = Column(String(64), nullable=False)
+    expected_size_bytes = Column(Integer, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    finalized = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

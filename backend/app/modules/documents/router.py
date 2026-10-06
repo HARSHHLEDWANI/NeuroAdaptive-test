@@ -10,12 +10,14 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.modules.auth.models import User
+from app.modules.courses.service import CourseNotFound
 from app.modules.documents.models import DocumentRole
 from app.modules.documents.service import (
     DocumentNotFound,
     DocumentService,
     SourcesLocked,
     UploadRejected,
+    UploadIntentNotFound,
 )
 
 router = APIRouter()
@@ -44,6 +46,49 @@ class PasteTextIn(BaseModel):
     title: Optional[str] = Field(default=None, max_length=200)
     text: str = Field(min_length=1)
     role: str = DocumentRole.STUDY.value
+
+
+class UploadIntentIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    size_bytes: int = Field(gt=0, le=25 * 1024 * 1024)
+    checksum_sha256: str = Field(min_length=64, max_length=64)
+    role: str = DocumentRole.STUDY.value
+    content_type: Optional[str] = Field(default=None, max_length=128)
+
+
+@router.post("/courses/{course_id}/documents/upload-intents", status_code=201)
+def create_upload_intent(
+    course_id: UUID, body: UploadIntentIn, user: User = Depends(get_current_user),
+    service: DocumentService = Depends(_service),
+):
+    try:
+        intent, upload = service.create_upload_intent(
+            course_id, user.id, body.filename, body.size_bytes,
+            body.checksum_sha256, body.role, body.content_type,
+        )
+    except (DocumentNotFound, CourseNotFound):
+        raise HTTPException(status_code=404, detail="Course not found")
+    except SourcesLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except UploadRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"intent_id": str(intent.id), "upload_url": upload.upload_url,
+            "required_headers": upload.required_headers, "expires_at": intent.expires_at}
+
+
+@router.post("/courses/{course_id}/documents/finalize/{intent_id}", status_code=201)
+def finalize_upload(
+    course_id: UUID, intent_id: UUID, user: User = Depends(get_current_user),
+    service: DocumentService = Depends(_service),
+):
+    try:
+        return _out(service.finalize_upload(course_id, intent_id, user.id))
+    except UploadIntentNotFound:
+        raise HTTPException(status_code=404, detail="Upload intent not found")
+    except SourcesLocked as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except UploadRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/courses/{course_id}/documents")

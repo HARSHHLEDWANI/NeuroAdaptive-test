@@ -1,10 +1,9 @@
 """
 Document upload and storage.
 
-Originals go to backend-local disk this sprint rather than object storage
-(boto3/minio are declared dependencies with no running service; substitution
-recorded in SPRINT_LOG.md). They are never served statically -- the only read
-path is an authenticated, owner-checked endpoint.
+New originals use private object storage through signed browser upload intents.
+The legacy multipart path remains for existing local-development tests only;
+it is never a public static file path.
 
 Ownership is enforced in this layer, as with courses: every query filters by
 owner_id, so a route that forgets cannot leak another learner's file.
@@ -12,6 +11,7 @@ owner_id, so a route that forgets cannot leak another learner's file.
 import hashlib
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 from uuid import UUID
@@ -25,11 +25,13 @@ from app.modules.documents.models import (
     DocumentRole,
     DocumentSourceKind,
     DocumentStatus,
+    StorageUploadIntent,
 )
+from app.modules.documents.storage import S3PrivateStorage
 
 # frozen-scope.md per-course limits, narrowed to this sprint's supported set.
 MAX_FILE_BYTES = 25 * 1024 * 1024
-MAX_STUDY_FILES = 2          # mandate: "one syllabus plus up to two study files"
+MAX_STUDY_FILES = 5          # frozen-scope.md: one syllabus plus five study files
 MAX_SYLLABUS_FILES = 1
 ALLOWED_SUFFIXES = (".pdf", ".txt", ".md", ".markdown")
 
@@ -46,6 +48,10 @@ class UploadRejected(Exception):
 
 class SourcesLocked(Exception):
     """The course's source set was finalized; documents are immutable."""
+
+
+class UploadIntentNotFound(Exception):
+    """Intent is missing, expired, consumed, or unavailable to this owner."""
 
 
 class DocumentService:
@@ -76,10 +82,62 @@ class DocumentService:
         return document
 
     def read_bytes(self, document: Document) -> bytes:
+        if document.storage_key:
+            return S3PrivateStorage().read(document.storage_key)
         path = Path(document.storage_path)
         if not path.is_file():
             raise DocumentNotFound(str(document.id))
         return path.read_bytes()
+
+    def create_upload_intent(
+        self, course_id: UUID, owner_id: int, filename: str, size_bytes: int,
+        checksum_sha256: str, role: str, content_type: Optional[str],
+    ):
+        course = self.courses.get_owned(course_id, owner_id)
+        if course.sources_are_immutable:
+            raise SourcesLocked("This course's sources are finalized. Create a new course to use different material.")
+        self._validate_metadata(filename, size_bytes, role, checksum_sha256)
+        self._check_role_cap(course_id, owner_id, role)
+        key = f"courses/{course_id}/{uuid.uuid4().hex}{Path(filename).suffix.lower()}"
+        intent = StorageUploadIntent(
+            course_id=course_id, owner_id=owner_id, object_key=key,
+            filename=Path(filename).name, content_type=content_type, role=role,
+            expected_checksum_sha256=checksum_sha256, expected_size_bytes=size_bytes,
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
+        )
+        self.db.add(intent)
+        self.db.commit()
+        self.db.refresh(intent)
+        return intent, S3PrivateStorage().create_upload_intent(key, content_type, checksum_sha256)
+
+    def finalize_upload(self, course_id: UUID, intent_id: UUID, owner_id: int) -> Document:
+        intent = self.db.query(StorageUploadIntent).filter(
+            StorageUploadIntent.id == intent_id,
+            StorageUploadIntent.course_id == course_id,
+            StorageUploadIntent.owner_id == owner_id,
+            StorageUploadIntent.finalized.is_(False),
+            StorageUploadIntent.expires_at > datetime.now(timezone.utc),
+        ).first()
+        if intent is None:
+            raise UploadIntentNotFound(str(intent_id))
+        course = self.courses.get_owned(course_id, owner_id)
+        if course.sources_are_immutable:
+            raise SourcesLocked("This course's sources are finalized. Create a new course to use different material.")
+        info = S3PrivateStorage().inspect(intent.object_key)
+        if info.size_bytes != intent.expected_size_bytes or info.checksum_sha256 != intent.expected_checksum_sha256:
+            raise UploadRejected("Uploaded object did not match the authorized file metadata.")
+        document = Document(
+            course_id=course_id, owner_id=owner_id, filename=intent.filename,
+            content_type=intent.content_type, role=intent.role,
+            status=DocumentStatus.UPLOADED.value, storage_path=intent.object_key,
+            storage_key=intent.object_key, size_bytes=info.size_bytes,
+            checksum_sha256=intent.expected_checksum_sha256,
+        )
+        intent.finalized = True
+        self.db.add(document)
+        self.db.commit()
+        self.db.refresh(document)
+        return document
 
     # -- writes ---------------------------------------------------------------
 
@@ -183,20 +241,27 @@ class DocumentService:
         )
 
     def _validate_shape(self, filename: str, content: bytes, role: str) -> None:
+        self._validate_metadata(filename, len(content), role, "0" * 64)
+        if len(content) == 0:
+            raise UploadRejected("The file is empty.")
+
+    def _validate_metadata(self, filename: str, size_bytes: int, role: str, checksum_sha256: str) -> None:
         suffix = Path(filename or "").suffix.lower()
         if suffix not in ALLOWED_SUFFIXES:
             raise UploadRejected(
                 f"Unsupported file type '{suffix or filename}'. "
                 "Supported this release: PDF, TXT, Markdown."
             )
-        if len(content) == 0:
+        if size_bytes <= 0:
             raise UploadRejected("The file is empty.")
-        if len(content) > MAX_FILE_BYTES:
+        if size_bytes > MAX_FILE_BYTES:
             raise UploadRejected(
                 f"File is larger than the {MAX_FILE_BYTES // (1024 * 1024)} MB limit."
             )
         if role not in (DocumentRole.SYLLABUS.value, DocumentRole.STUDY.value):
             raise UploadRejected(f"Unknown document role '{role}'.")
+        if len(checksum_sha256) != 64 or any(c not in "0123456789abcdef" for c in checksum_sha256.lower()):
+            raise UploadRejected("Checksum must be a SHA-256 hexadecimal digest.")
 
     def _check_role_cap(self, course_id: UUID, owner_id: int, role: str) -> None:
         existing = (
