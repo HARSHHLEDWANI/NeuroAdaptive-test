@@ -8,11 +8,14 @@ behavior lives in [learning-rules.md](learning-rules.md).
 1. Sign in with Google; arrive at an empty dashboard.
 2. Create a course: name, learning goal, sources. Optionally choose a subject and
    explicitly link an earlier course owned by the student.
-3. Check files, then prepare the course. Processing is asynchronous; leaving is safe.
+3. Check files, then prepare asynchronously; leaving is safe. Prioritize the first
+   lesson/assessment while later material prepares progressively.
 4. Review modules, lessons, objectives, and prerequisites. Rename modules/lessons.
    Missing prerequisite coverage is a warning; publishing remains optional and available
    if the course otherwise passes validation.
-5. Publish. Sources become fixed for the published course.
+5. Publish the validated outline; sources become fixed. If the first lesson/assessment
+   is still preparing, show its state. Begin study when ready, without waiting for all
+   lessons/variants.
 6. Take the diagnostic or skip. Skipping leaves concepts Not assessed.
 7. Reach course overview. Continue studying opens the selected activity.
 
@@ -55,7 +58,16 @@ Refresh/navigation must not generate replacement questions or new activities.
 | Valid questions unavailable | Retry or Back to course | Activity incomplete; no invented evidence |
 | Answer submission failure | Retry submission | Entered answer; no confirmed lock |
 | Grading failure | Retry grading | Submitted answer; no mastery update |
-| Disputed grading | Report grading issue | Original question, answer, judgment for authorized review |
+| Disputed grading | Report grading issue | Question, answer, rubric, original judgment for authorized review |
+| Provider outage / AI allowance exhausted | Read saved content; retry generation when available | Course, validated artifacts, progress, pending answers |
+
+Before publication, replacement invalidates/rebuilds artifacts derived from the changed
+source while retaining other valid files. Old dependent work cannot appear as current
+content. Revalidate before publication.
+
+Authorized reviewers receive reports through a small review workflow. Corrections retain
+original judgments and recompute affected evidence without another attempt. Reporting
+alone changes no mastery and promises no immediate response.
 
 ## Unit 1 followed by Unit 2
 
@@ -73,6 +85,13 @@ further practice is optional and app-selected. No automatic loss of that milesto
 from decay is specified yet.
 
 Account controls: tracking preference, presentation reset, sign-out, deletion.
-Minimal tracking must retain the state necessary to deliver and resume learning.
-Deletion behavior/retention are subject to the later safeguard review.
+Minimal tracking retains answers, mastery evidence, activity progress, and decision
+records needed for learning; reading-time/interaction telemetry is optional.
+Deletion/retention must cover every added entity and storage object.
+
+## Deployed demonstration
+
+Show a prepared course completing a smooth learning cycle, then a fresh upload through
+real asynchronous processing. Both use production paths/providers, without fake learning
+state. Measure responsiveness; live generation is not promised to be instantaneous.
 

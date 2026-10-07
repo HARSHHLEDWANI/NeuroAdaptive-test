@@ -6,8 +6,8 @@ Proposed screens; route names and visual styling are not prescribed.
 | --- | --- | --- |
 | Sign in | Product purpose; Google sign-in; recoverable auth error | Sign in |
 | Dashboard | Course title/state/progress; first-course empty state | Create course; Finish setup / Review outline / Continue studying |
-| Course setup | Name, goal, files, validation; optional subject and previous-course link | Add/remove sources before locking; Prepare course |
-| Processing | Current/completed stages; understandable failure reason | Back to dashboard; Review outline when ready; Retry / Replace source |
+| Course setup | Name, goal, files, validation; optional subject and previous-course link | Add/remove/replace sources before publication; Prepare course |
+| Processing | Current/completed stages; outline and first-activity readiness; clear failure reason | Back to dashboard; Review outline when ready; Retry / Replace source before publication |
 | Outline review | Modules, lessons, objectives, prerequisite relationships; coverage warnings | Rename modules/lessons; Publish |
 | Diagnostic introduction | Purpose, question count, submission rules, meaning of skipping | Take diagnostic; Skip for now |
 | Course overview | Inspectable outline; concept labels/evidence strength; coverage; current activity and reason | Continue studying; inspect outline/progress; Back to dashboard |
@@ -16,6 +16,10 @@ Proposed screens; route names and visual styling are not prescribed.
 | Results | Correctness or pending judgment; expected reasoning; rubric points; sources; concept changes; next step | Continue; Ask tutor; Report grading issue; Retry grading; Back to course |
 | Completion | Coverage and demonstrated understanding; limits of the estimate | Return to dashboard; Optional practice |
 | Account settings | Tracking preference; independent presentation reset; account controls | Save; Reset preferences; Sign out; Delete account |
+
+Reviewer screen (restricted): question, answer, rubric, original judgment, report,
+correction history. Actions: retain judgment or record a correction with a reason.
+Explicit reviewer authorization is required; this is not a general learner screen.
 
 ## Workspace
 
@@ -27,6 +31,9 @@ Proposed screens; route names and visual styling are not prescribed.
 - Tutor/source panels preserve activity position. Responsive behavior must retain this
   context on smaller screens.
 - No selector for alternative activities; outline inspection does not launch lessons.
+- Load saved validated content when available. Reuse prepared formats; show preparation
+  for uncached variants without losing position. Tutor shows progress while generating/
+  checking; unvalidated answer text is not displayed.
 
 ## Assessment and results
 
@@ -36,12 +43,16 @@ Proposed screens; route names and visual styling are not prescribed.
   resume. Grading-pending questions remain clearly pending.
 - Reading finished, assessment submitted, grading finished, and understanding demonstrated
   are separate states, not one Complete Lesson button.
+- Reports promise no immediate correction. Results distinguish original/corrected
+  judgments; pending grading never appears as incorrect.
 
 ## Shared states
 
 Every data-dependent screen needs loading, empty, failure/retry, and unavailable
 handling. Show actionable learner language, not raw provider errors. Preserve entered
 work and saved progress. Foreign/deleted resources must not expose private content.
+When generation pauses, saved content/progress remain accessible; identify unavailable
+actions clearly. Settings distinguish required learning records from optional telemetry.
 
 ## Progress vocabulary
 

@@ -1,12 +1,13 @@
 # Build plan
 
 Ordered work packages, not authorization to start code changes. Reuse existing modules.
-Resolve dependencies before beginning a package; architecture/safeguards remain separate.
+Resolve dependencies first. Agreed architecture/safeguards are in [README.md](README.md);
+numeric and operational details remain open.
 
 ## Before implementation
 
-- Agree ownership, operating instructions, and architecture/safeguard decisions that block
-  the selected package. Reconcile scope conflicts listed in [README.md](README.md).
+- Agree ownership/operating instructions and resolve the package's remaining policy
+  details. Carry approved scope revisions into its contracts explicitly.
 - Inspect affected code/tests. Establish explicit activity, assessment, answer, grading,
   and completion contracts rather than treating a recommendation as progress.
 - Every schema change needs a new Alembic migration. Update OpenAPI first and regenerate
@@ -18,13 +19,14 @@ Resolve dependencies before beginning a package; architecture/safeguards remain 
 
 | ID | Work package | Depends on | Demonstrated pass condition |
 | --- | --- | --- | --- |
+| P0 | Hosted foundation and worker/storage verification | Deployment/configuration | Vercel reaches Railway API; worker consumes Railway Redis tasks; API/worker access private Supabase originals; deployed identity/DB/migrations work; restart recovery demonstrated |
 | P1 | Activity/assessment lifecycle and saved progress contracts | Policy review | States distinguish reading, submission, pending grading, graded assessment, mastery; reload returns same unfinished work |
-| P2 | Grounded MCQ lesson assessment and reliable submission | P1; question policy | Unseen upload produces lesson and supported question set; submissions lock exactly once; restart resumes same questions; feedback withheld until set submitted |
-| P3 | Results, evidence, progress, and next-activity integration | P2; mastery policy | Real graded answers update relevant concepts once; reading does not; results show changes; Continue uses recorded selection and saved progress |
+| P2 | Async first-activity preparation, grounded MCQ assessment, reliable submission | P1; question/citation policy | Unseen upload prioritizes validated lesson/question set; saved artifacts reused; submissions lock once; restart resumes same questions; feedback withheld until set submitted |
+| P3 | Results, evidence, progress, and next-activity integration | P0, P2; mastery policy | Deployed graded answers update relevant concepts once; reading does not; results show changes; Continue uses recorded selection/progress; bounded next-activity preparation starts |
 | P4 | Remediation, targeted practice, and challenge experiences | P3; eligibility policy | Weak/mixed/strong evidence reaches the appropriate distinct activity; fresh questions; no unsupported prerequisite teaching |
-| P5 | Short-answer grading and issue reporting | P2–P3; rubric/review policy | Rubric feedback has sources; failed grading remains pending; retries don't duplicate evidence; dispute saved with original judgment |
+| P5 | Short-answer grading and authorized review | P2–P3; rubric/access/retention policy | Rubric feedback has sources; failed grading remains pending; retries don't duplicate evidence; reviewer correction preserves original judgment and updates evidence once |
 | P6 | Course overview and workspace integration | P3–P5 | Outline inspection cannot launch alternatives; tutor/sources open alongside teaching/results; tutor unavailable during assessment; format and position preserved |
-| P7 | Setup/review/recovery and account UX | P1; replacement/retention policy | Module/lesson renames persist; diagnostic skip/retry works; failures recover without false completion; settings/reset/deletion handle new records |
+| P7 | Setup/review/recovery and account UX | P1; replacement/retention contracts | Renames persist; diagnostic skip/retry; replacement rebuilds dependencies; minimal tracking preserves learning; deletion covers new records/files |
 | P8 | Subjects and explicitly linked earlier courses | P3; cross-course/matching policy | Unit 2 can use supported Unit 1 evidence/source links; uncertain match offers optional check; standalone path works; foreign courses inaccessible |
 | P9 | Completion, full polish, and acceptance evidence | P4–P8; completion policy | Coverage differs from mastery; sufficient evidence leads to summary and optional guided practice; no unfinished advertised action |
 
@@ -32,13 +34,25 @@ Build MCQ end-to-end first, then add short answers and the full agreed scope. In
 checkpoints are not product completion. Finalize layout/styling across screens after the
 state contracts are stable; include responsive, empty, loading, and recovery states.
 
+## First milestone: P0–P3 together
+
+A deployed, resumable lesson → assessment → results → mastery → next-activity flow.
+Real providers/preparation for demonstrations; deterministic stubs in automated checks.
+MCQ first, then short answers and all activity types. Preserve work across navigation/
+worker restarts; check all factual teaching claims; retain saved-content access on failures.
+
+Use bounded worker tasks with durable artifacts. Waiting-student work outranks initial
+readiness, which outranks speculative work. Define dispatch recovery, leases,
+acknowledgments, timeouts, retries, and cross-worker provider capacity; the queue alone
+is not a recovery guarantee. Load validated saved content/variants without model calls.
+
 ## Verification per package
 
 | Layer | Highest useful seam |
 | --- | --- |
 | Unit | Selection/eligibility, mastery, evidence attribution, matching decisions |
 | Contract | Provider schemas; assessment/results/progress APIs; generated frontend types |
-| Integration | Owned REST flows; migrations; durable resume; duplicate submission/grading; approved linked retrieval |
+| Integration | Owned REST flows; migrations; durable resume; duplicate submission/grading; linked retrieval; reviewer correction/access; private storage |
 | Pipeline | Deterministic provider fixtures; stage retries and invalid artifacts |
 | Browser | Upload/review/diagnostic/study/assessment/results/resume/complete and failure recovery |
 
@@ -53,7 +67,12 @@ accidentally. Keep checks distinguishable as executed, inspection-only, or block
 - Demonstrate diagnostic skip, interruption/resume, weak-answer remediation, practice,
   challenge, pending grading, unsupported content, and optional completion practice.
 - Demonstrate Unit 1 → Unit 2 linking separately, plus the standalone course path.
-- Verify ownership and approved citation/safeguard behavior, including new paths.
+- Verify ownership and approved safeguards, including all factual teaching claims,
+  linked-source boundaries, reviewer corrections, source replacement, minimal telemetry,
+  and exhausted-allowance behavior.
+- Verify deployment/recovery with Railway Redis and private Supabase Storage. Measure
+  saved-content, tutor, grading, and preparation responsiveness separately.
+- Demo a real prepared course and a separate fresh upload; no fake artifacts.
 - No fake runtime output, mastery, or traces; no learner-content/answer/secret leakage
   in logs or commits.
 - Report actual commands/results, limitations, migrations, and unresolved decisions.

@@ -1,7 +1,7 @@
 # Learning rules
 
-Agreed product behavior. Thresholds, persistence design, and safeguard policy remain
-open where noted in [README.md](README.md).
+Agreed product and safeguard behavior. Numeric policies and implementation details
+remain open where noted in [README.md](README.md).
 
 ## Activities
 
@@ -44,8 +44,10 @@ must have honest recovery; the ultimate exit policy remains open.
 - Grading failure stores Awaiting grading, not incorrect. Evidence enters mastery once
   per successfully graded attempt; retries must not duplicate it.
 - Results explain rubric points, concept changes, source support, and the next step.
-- Report grading issue preserves original evidence for review. No automatic score change
-  or immediate-resolution promise; review/correction process remains open.
+- Reporting preserves original evidence; no automatic score change or immediate-resolution
+  promise. An authorized reviewer can correct the judgment. Keep the original judgment
+  and correction history; recompute affected mastery/attributed outcomes without another
+  attempt. Preserve historical decision traces. Access and correction propagation need contracts.
 
 ## Mastery and presentation
 
@@ -62,15 +64,40 @@ must have honest recovery; the ultimate exit policy remains open.
 
 ## Sources and prerequisites
 
-- Published sources stay fixed; new material creates a new course.
+- Published sources stay fixed; new material creates a new course. Before publication,
+  replacement keeps valid files, invalidates dependent passages/concepts/content/questions,
+  and rebuilds affected artifacts. Replaced or invalid artifacts cannot be published.
 - Source absence and knowledge absence are different. Missing explanations warn without
   blocking publication; detection must have support rather than invent a prerequisite.
-- Subject grouping is optional. Explicit owner-scoped links permit consideration of earlier
-  courses only after the cross-course policy is agreed.
+- Subject grouping is optional. Explicit links permit earlier owned courses; grouping
+  alone grants no reuse. Retrieval/evidence queries enforce links and ownership.
+  Matching and attribution details remain open.
 - Match concepts by meaning/scope, not names alone. Do not copy/merge mastery blindly;
   preserve origins and avoid double-counting. Uncertain matches offer optional checks.
 - Unsupported teaching/questions fail honestly. Repeated remediation changes supported
   explanation/questions; never fabricate missing material.
+
+## Preparation and grounding
+
+- Celery prepares artifacts asynchronously. PostgreSQL tracks stages/artifacts; Railway
+  Redis handles delivery/coordination, not authoritative learning records.
+- Prioritize waiting-student work, first-course readiness, then bounded lookahead.
+  Reserve capacity so speculative generation cannot crowd out interactive work.
+- Prepare first lesson/assessment early; do not wait for every variant/lesson. Publish
+  validated outlines only; start studying when the first activity is ready.
+- Cache validated artifacts/variants with provenance; reuse only matching course/source
+  versions, concepts, and formats. Resume uses fixed sets; follow-up needs fresh questions.
+- Use current-course or explicitly linked owner-authorized passages only. Uploaded/
+  retrieved text stays data, never instructions or a tool invocation channel.
+- Check every factual claim's citation ownership/existence and semantic support before
+  display. Strip unsupported claims; abstain if the remainder cannot adequately answer.
+  Structural checks alone are insufficient; all displayed factual text must be covered.
+- Bounded retries stay on the configured provider, then pause with recovery. Outages/
+  exhausted allowances preserve saved content/progress; ungraded answers stay pending.
+  Account for actual provider work including preparation, retries, and validation;
+  accounting and limits need an explicit policy.
+- Keep required learning evidence/progress/decisions when optional telemetry is disabled.
+  Reading time and interaction analytics are optional, not mastery evidence.
 
 ## Completion
 
