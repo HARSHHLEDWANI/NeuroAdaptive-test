@@ -1,7 +1,7 @@
 # NeuroLearn product plan
 
-Status: agreed product direction, not a description of completed implementation.
-Date: 2026-10-07. Code baseline inspected: `develop`; no application execution.
+Status: agreed product direction. P0 repository configuration is implemented; hosted
+deployment and runtime pass conditions have not been demonstrated. Date: 2026-10-07.
 
 ## Read in this order
 
@@ -44,6 +44,32 @@ Selected target, not a verified deployment:
 | Product data | Supabase PostgreSQL with pgvector; authoritative progress/jobs/evidence |
 | Original sources | Private Supabase Storage; owner-authorized access for API/workers |
 | AI | Configurable Gemini generation and embeddings; no automatic provider fallback |
+
+### P0 repository deployment configuration
+
+Use Vercel with root directory `frontend` and its existing `npm run build`, plus two
+Railway services built from `backend/`: API (`./start-api.sh`) and worker
+(`./start-worker.sh`). The Dockerfile's default target is `production`; set the
+worker's start command override to `./start-worker.sh`. Set Railway API readiness to
+`/health/db`. Configure `alembic upgrade head` as the API service's pre-deploy command;
+Railway runs it before API deployments, while the worker has no migration command. Set
+Supabase direct PostgreSQL `DATABASE_URL` on API and worker (use the session pooler only
+if the runtime network requires IPv4), Railway Redis URL as both Celery URLs, and Supabase
+`STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_ACCESS_KEY`,
+`STORAGE_S3_SECRET_KEY`, and `STORAGE_BUCKET` on API and worker. Set `SECRET_KEY`,
+`INTERNAL_API_KEY`, `GEMINI_API_KEY`, and Celery URLs on both Railway services; set
+`FRONTEND_URL` on the API. Keep storage credentials server-side. Keep Google OAuth
+credentials in Vercel's server-side environment.
+Set Vercel `INTERNAL_API_URL` to the Railway API public HTTPS origin and the same
+`INTERNAL_API_KEY`; set `NEXTAUTH_URL`, `NEXTAUTH_SECRET`, Google client credentials,
+and `AUTH_TRUST_HOST` there. Register the exact Google callback URI
+`https://<production-host>/api/auth/callback/google`. These instructions do not show
+that provider accounts are configured or services deployed.
+
+The API listens on Railway-provided `PORT` and has HTTP database readiness at
+`/health/db`. The worker needs no inbound port or public domain; its progress is stored
+as PostgreSQL stages and lease heartbeats. Watch worker service state and job leases to
+identify interruption; retry is user-triggered. Vercel uses the public Railway API origin.
 
 Prepare the first lesson and assessment as soon as required source/outline artifacts
 are valid. Studying starts after outline publication and first-activity readiness;
@@ -100,4 +126,3 @@ authorized grading review. Railway Redis replaces Upstash. These revisions super
 earlier product descriptions where they conflict; revise contracts before implementing.
 Evidence decay/completion interaction remains open. Prerequisite remediation is
 app-selected work, not a publication block for missing source coverage.
-

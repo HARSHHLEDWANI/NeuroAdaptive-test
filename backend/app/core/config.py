@@ -59,12 +59,13 @@ class Settings(BaseSettings):
     # output; a second malformed result abstains rather than inventing data.
     CONCEPT_EXTRACTION_MAX_GENERATION_ATTEMPTS_V1: int = 2
 
-    # Worker / queue. Redis is local in Compose and Upstash-compatible in
-    # production. Task dispatch is intentionally separate from request work.
+    # Worker / queue. Redis coordinates tasks; PostgreSQL owns job state.
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
     JOB_HEARTBEAT_SECONDS_V1: int = Field(default=15, gt=0)
     JOB_LEASE_SECONDS_V1: int = Field(default=120, gt=0)
+    WORKER_TASK_SOFT_TIME_LIMIT_SECONDS_V1: int = Field(default=1200, gt=0)
+    WORKER_TASK_TIME_LIMIT_SECONDS_V1: int = Field(default=1500, gt=0)
     EVALUATOR_EMAILS: str = ""  # comma-separated allowlist; closed by default
 
     # Indexed in bounded batches. These versioned values are unvalidated
@@ -75,6 +76,7 @@ class Settings(BaseSettings):
     # Private S3-compatible storage (Supabase Storage production endpoint).
     STORAGE_BUCKET: str = "neurolearn-sources"
     STORAGE_S3_ENDPOINT: str = ""
+    STORAGE_S3_REGION: str = "us-east-1"
     STORAGE_S3_ACCESS_KEY: str = ""
     STORAGE_S3_SECRET_KEY: str = ""
     STORAGE_SIGNED_URL_TTL_SECONDS_V1: int = 900
@@ -105,6 +107,8 @@ class Settings(BaseSettings):
     def validate_worker_lease(self):
         if self.JOB_LEASE_SECONDS_V1 <= self.JOB_HEARTBEAT_SECONDS_V1:
             raise ValueError("JOB_LEASE_SECONDS_V1 must exceed JOB_HEARTBEAT_SECONDS_V1")
+        if self.WORKER_TASK_TIME_LIMIT_SECONDS_V1 <= self.WORKER_TASK_SOFT_TIME_LIMIT_SECONDS_V1:
+            raise ValueError("WORKER_TASK_TIME_LIMIT_SECONDS_V1 must exceed the soft time limit")
         return self
 
     model_config = ConfigDict(

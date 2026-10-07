@@ -15,4 +15,8 @@ celery_app.conf.update(
     result_serializer="json",
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    task_soft_time_limit=settings.WORKER_TASK_SOFT_TIME_LIMIT_SECONDS_V1,
+    task_time_limit=settings.WORKER_TASK_TIME_LIMIT_SECONDS_V1,
+    broker_transport_options={"visibility_timeout": 1800},
+    result_backend_transport_options={"visibility_timeout": 1800},
 )

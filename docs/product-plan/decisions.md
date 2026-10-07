@@ -4,6 +4,33 @@ This file records completed cleanup and preparation work for future reference. P
 direction and implementation gaps remain documented in [README.md](README.md) and
 [implementation-gap.md](implementation-gap.md).
 
+## P0 deployed foundation — repository configuration — 2026-10-07
+
+**Implemented:** added production Railway API and worker entrypoints, Railway `PORT`
+binding, health-check/deploy instructions, bounded Celery task limits, and private
+Supabase S3-compatible upload handling with streamed SHA-256 verification. Local Compose
+continues to override the API command for development. Vercel uses its native Next.js
+build from `frontend/`; provider-specific projects and values are not in the repository.
+
+**Inspected:** Alembic remains the schema authority; the chain has one head and its
+historical populated-legacy-table guard remains active. Jobs use PostgreSQL leases and
+heartbeats, late acknowledgment, durable stages, and explicit learner retry after dispatch
+failure or interruption. This is user-triggered retry, not demonstrated automatic recovery.
+
+**Not executed:** no provider project was linked and Docker was unavailable. No migration,
+deployment, OAuth flow, storage operation, or live queue job was run. No production URL is
+known. See [implementation-gap.md](implementation-gap.md) for environment placement,
+remaining setup, and verification status.
+
+**Official references reviewed:** [Railway deployment configuration](https://docs.railway.com/deployments/pre-deploy-command),
+[Railway Redis](https://docs.railway.com/databases/redis), [Railway private networking](https://docs.railway.com/networking/private-networking),
+[Supabase PostgreSQL connections](https://supabase.com/docs/guides/database/connecting-to-postgres),
+[Supabase pgvector](https://supabase.com/docs/guides/database/extensions/pgvector),
+[Supabase S3 compatibility](https://supabase.com/docs/guides/storage/s3/compatibility),
+[Supabase S3 authentication](https://supabase.com/docs/guides/storage/s3/authentication),
+[Vercel Next.js builds](https://vercel.com/docs/builds/configure-a-build), and
+[Google OAuth web-server flow](https://developers.google.com/identity/protocols/oauth2/web-server).
+
 ## Pre-P0 frontend cleanup — 2026-10-07
 
 **Code inspection:** Removed the unused adaptive/tracking chain (`AdaptiveContent`,

@@ -99,7 +99,7 @@ class DocumentService:
         self._validate_metadata(filename, size_bytes, role, checksum_sha256)
         self._check_role_cap(course_id, owner_id, role)
         key = f"courses/{course_id}/{uuid.uuid4().hex}{Path(filename).suffix.lower()}"
-        upload = S3PrivateStorage().create_upload_intent(key, content_type, checksum_sha256)
+        upload = S3PrivateStorage().create_upload_intent(key, content_type)
         intent = StorageUploadIntent(
             course_id=course_id, owner_id=owner_id, object_key=key,
             filename=Path(filename).name, content_type=content_type, role=role,
@@ -128,8 +128,10 @@ class DocumentService:
         if intent.finalized:
             raise UploadIntentNotFound(str(intent_id))
         self._check_role_cap(course_id, owner_id, intent.role)
-        info = S3PrivateStorage().inspect(intent.object_key)
-        if info.size_bytes != intent.expected_size_bytes or info.checksum_sha256 != intent.expected_checksum_sha256:
+        storage = S3PrivateStorage()
+        info = storage.inspect(intent.object_key)
+        if (info.size_bytes != intent.expected_size_bytes
+                or storage.checksum_sha256(intent.object_key) != intent.expected_checksum_sha256):
             raise UploadRejected("Uploaded object did not match the authorized file metadata.")
         document = Document(
             course_id=course_id, owner_id=owner_id, filename=intent.filename,

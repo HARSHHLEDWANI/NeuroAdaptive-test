@@ -16,10 +16,14 @@ ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
 RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 COPY . .
 
-RUN chmod +x wait-for-db.sh
+RUN chmod +x wait-for-db.sh start-api.sh start-worker.sh
 
-CMD ["sh", "wait-for-db.sh"]
 FROM runtime AS test
 COPY requirements-dev.txt .
 RUN pip install --no-cache-dir -c constraints.txt -r requirements-dev.txt
 CMD ["python", "-m", "pytest"]
+
+# Keep production as the default Docker target for Railway. Compose selects
+# `runtime` explicitly for local development; CI can select `test` explicitly.
+FROM runtime AS production
+CMD ["./start-api.sh"]

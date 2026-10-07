@@ -19,7 +19,7 @@ numeric and operational details remain open.
 
 | ID | Work package | Depends on | Demonstrated pass condition |
 | --- | --- | --- | --- |
-| P0 | Hosted foundation and worker/storage verification | Deployment/configuration | Vercel reaches Railway API; worker consumes Railway Redis tasks; API/worker access private Supabase originals; deployed identity/DB/migrations work; restart recovery demonstrated |
+| P0 | Hosted foundation and worker/storage verification | Deployment/configuration | **Repository configuration implemented; hosted pass conditions remain unverified.** Vercel reaches Railway API; worker consumes Railway Redis tasks; API/worker access private Supabase originals; deployed identity/DB/migrations work; restart recovery demonstrated |
 | P1 | Activity/assessment lifecycle and saved progress contracts | Policy review | States distinguish reading, submission, pending grading, graded assessment, mastery; reload returns same unfinished work |
 | P2 | Async first-activity preparation, grounded MCQ assessment, reliable submission | P1; question/citation policy | Unseen upload prioritizes validated lesson/question set; saved artifacts reused; submissions lock once; restart resumes same questions; feedback withheld until set submitted |
 | P3 | Results, evidence, progress, and next-activity integration | P0, P2; mastery policy | Deployed graded answers update relevant concepts once; reading does not; results show changes; Continue uses recorded selection/progress; bounded next-activity preparation starts |
@@ -80,4 +80,3 @@ accidentally. Keep checks distinguishable as executed, inspection-only, or block
 
 If learner evaluation is pursued, define usability and educational measures separately.
 Do not reuse the PDF's historical counts as current acceptance evidence.
-
