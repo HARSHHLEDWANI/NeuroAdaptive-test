@@ -59,4 +59,3 @@ OpenAPI-derived frontend types. Existing safeguards must be reviewed for new pat
 especially linked retrieval, reviewer access, replacement, pending grading, and worker
 limits. Targets are selected in [README.md](README.md); hosted compatibility/configuration
 remain unverified. This is an inspection snapshot, not a new exhaustive audit.
-
