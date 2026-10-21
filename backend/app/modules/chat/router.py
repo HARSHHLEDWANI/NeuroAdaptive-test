@@ -1,12 +1,14 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.modules.auth.models import User
 from app.core.config import settings
-from openai import AsyncOpenAI
 from typing import Optional
 
 from app.services.adaptation import (
+    get_client,
     build_adaptive_system_prompt,
     build_fslsm_system_prompt,
     archetype_to_scores,
@@ -17,13 +19,15 @@ from app.services.adaptation import (
 from app.modules.profiling.models import UserProfile
 from app.modules.chat.models import ChatSession, ChatMessage
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
-# Initialize Groq-compatible OpenAI client
-client = AsyncOpenAI(
-    base_url="https://api.groq.com/openai/v1",
-    api_key=settings.GROQ_API_KEY,
-)
+# Rough proxy for request size, not an exact token count -- catches the
+# common case (a large PDF's extracted text) before an oversized request
+# ever reaches Groq. Unvalidated default, not tuned against Groq's actual
+# byte/token limit for openai/gpt-oss-120b.
+MAX_MESSAGE_CHARS = 60_000
 
 
 def _sanitize(text: str) -> str:
@@ -199,21 +203,63 @@ async def send_message(
                     detail="Only text-based files (.txt, .md, .csv) and PDFs are supported.",
                 )
 
+    # Reject an oversized message BEFORE calling Groq: an attached file (a
+    # PDF's full extracted text, especially) can push the request body past
+    # Groq's own limit, which previously surfaced as an opaque 502 "Bad
+    # Gateway" with no indication of why. Character count is a rough proxy
+    # for request size/tokens, not exact, but catching it here is instant
+    # and free instead of waiting on a round trip that Groq was always going
+    # to reject anyway.
+    if len(user_content) > MAX_MESSAGE_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Your message (including any attached file) is too long "
+                f"({len(user_content):,} characters, limit {MAX_MESSAGE_CHARS:,}). "
+                "Try a shorter message or a smaller file."
+            ),
+        )
+
     messages_for_llm.append({"role": "user", "content": user_content})
 
     # ── 5. Call Groq LLM ─────────────────────────────────────────────────────
     try:
-        response = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+        response = await get_client().chat.completions.create(
+            model=settings.GROQ_MODEL,
             messages=messages_for_llm,
             temperature=0.7,
             max_tokens=2048,
         )
         bot_text: str = _sanitize(response.choices[0].message.content or "")
     except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"LLM call failed: {exc}"
+        # The provider's own error text was previously interpolated straight
+        # into the response, so a learner saw raw JSON naming the model, the
+        # provider error code and the request type. That leaks internals and
+        # tells them nothing they can act on. Detail goes to the log; the
+        # caller gets a category.
+        status = getattr(exc, "status_code", None)
+        logger.error(
+            "Groq call failed: %s status=%s model=%s",
+            type(exc).__name__,
+            status,
+            settings.GROQ_MODEL,
         )
+
+        if status in (401, 403):
+            detail = "The AI provider rejected our credentials. This is a server configuration problem, not something you did."
+        elif status == 404:
+            # Providers retire models without notice; this is the exact failure
+            # that produced the 404 on llama-3.3-70b-versatile.
+            detail = "The configured AI model is unavailable. This is a server configuration problem, not something you did."
+        elif status == 429:
+            detail = "The AI provider is rate limiting us. Wait a moment and try again."
+        elif status == 413:
+            detail = "Your message or attached file is too large for the AI provider to accept. Try a shorter message or a smaller file."
+            raise HTTPException(status_code=413, detail=detail)
+        else:
+            detail = "The AI service did not respond. Try again in a moment."
+
+        raise HTTPException(status_code=502, detail=detail)
 
     # ── 6. Persist messages ──────────────────────────────────────────────────
     user_msg = ChatMessage(session_id=chat_session.id, role="user", content=_sanitize(prompt))

@@ -1,0 +1,577 @@
+"""
+API tests for upload and the processing pipeline.
+
+Covers the mandate's non-negotiables for this item: owner filters enforced
+below the route, an uploaded file never served unauthenticated, and a document
+with no extractable text landing on an explicit NEEDS_INPUT state with a
+plain-language reason rather than silent empty output.
+"""
+import pytest
+
+from app.modules.documents.chunk_models import Chunk
+from app.modules.documents.models import Document
+from tests.conftest import auth_headers
+
+PROSE = ("Parsing is the process of analysing a string of symbols. " * 12).strip()
+
+
+@pytest.fixture()
+def course(client, owner):
+    response = client.post(
+        "/api/v1/courses", json={"title": "Compilers"}, headers=auth_headers(owner.email)
+    )
+    return response.json()
+
+
+def upload(client, email, course_id, filename="notes.txt", content=None, role="STUDY"):
+    return client.post(
+        f"/api/v1/courses/{course_id}/documents",
+        files={"file": (filename, content if content is not None else PROSE.encode(), "text/plain")},
+        data={"role": role},
+        headers=auth_headers(email),
+    )
+
+
+def unique_upload(client, email, course_id, role="STUDY", filename=None):
+    """
+    A test helper for cases exercising "multiple distinct files" behaviour
+    (the per-role cap in particular): each call's content differs, so
+    checksum-based dedup never collapses them into one document.
+    """
+    import uuid as _uuid
+
+    marker = _uuid.uuid4().hex
+    text = PROSE + "\n\nunique marker: " + marker
+    return upload(client, email, course_id, filename=filename or "notes.txt", content=text.encode(), role=role)
+
+
+class TestUploadOwnership:
+    def test_owner_can_upload(self, client, owner, course, db_session):
+        response = upload(client, owner.email, course["id"])
+        assert response.status_code == 201
+        assert db_session.query(Document).one().owner_id == owner.id
+
+    def test_other_user_cannot_upload_to_your_course(self, client, other_user, course, db_session):
+        response = upload(client, other_user.email, course["id"])
+        assert response.status_code == 404
+        assert db_session.query(Document).count() == 0
+
+    def test_other_user_cannot_list_your_documents(self, client, owner, other_user, course):
+        upload(client, owner.email, course["id"])
+        response = client.get(
+            f"/api/v1/courses/{course['id']}/documents", headers=auth_headers(other_user.email)
+        )
+        assert response.status_code == 404
+
+    def test_other_user_cannot_download_your_file(self, client, owner, other_user, course):
+        doc_id = upload(client, owner.email, course["id"]).json()["id"]
+        response = client.get(
+            f"/api/v1/documents/{doc_id}/content", headers=auth_headers(other_user.email)
+        )
+        assert response.status_code == 404
+
+    def test_download_requires_authentication(self, client, owner, course):
+        """An uploaded original is never reachable unauthenticated."""
+        doc_id = upload(client, owner.email, course["id"]).json()["id"]
+        assert client.get(f"/api/v1/documents/{doc_id}/content").status_code == 422
+
+    def test_owner_can_download_their_own(self, client, owner, course):
+        doc_id = upload(client, owner.email, course["id"]).json()["id"]
+        response = client.get(
+            f"/api/v1/documents/{doc_id}/content", headers=auth_headers(owner.email)
+        )
+        assert response.status_code == 200
+        assert b"Parsing" in response.content
+
+
+class TestUploadValidation:
+    def test_rejects_unsupported_extension(self, client, owner, course):
+        response = upload(client, owner.email, course["id"], filename="deck.pptx")
+        assert response.status_code == 400
+        assert "Supported this release" in response.json()["detail"]
+
+    def test_rejects_empty_file(self, client, owner, course):
+        response = upload(client, owner.email, course["id"], content=b"")
+        assert response.status_code == 400
+
+    def test_enforces_the_study_file_cap(self, client, owner, course):
+        for _ in range(2):
+            assert unique_upload(client, owner.email, course["id"]).status_code == 201
+        third = unique_upload(client, owner.email, course["id"])
+        assert third.status_code == 400
+        assert "maximum" in third.json()["detail"]
+
+    def test_syllabus_has_its_own_cap(self, client, owner, course):
+        assert unique_upload(client, owner.email, course["id"], role="SYLLABUS").status_code == 201
+        assert unique_upload(client, owner.email, course["id"], role="SYLLABUS").status_code == 400
+
+    def test_stored_filename_does_not_control_the_path(self, client, owner, course, db_session):
+        """A learner-supplied name must never decide where bytes land."""
+        upload(client, owner.email, course["id"], filename="../../escape.txt")
+        document = db_session.query(Document).one()
+        assert ".." not in document.storage_path
+        assert document.filename == "escape.txt"
+
+    def test_upload_refused_after_sources_finalized(self, client, owner, course):
+        client.post(
+            f"/api/v1/courses/{course['id']}/finalize-sources", headers=auth_headers(owner.email)
+        )
+        response = upload(client, owner.email, course["id"])
+        assert response.status_code == 409
+
+
+class TestMagicByteRejection:
+    def test_exe_disguised_as_pdf_is_rejected(self, client, owner, course):
+        exe_bytes = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff" + b"\x00" * 20
+        response = upload(client, owner.email, course["id"], filename="notes.pdf", content=exe_bytes)
+        assert response.status_code == 400
+        assert "executable" in response.json()["detail"]
+
+    def test_a_genuine_pdf_is_accepted(self, client, owner, course):
+        import io as _io
+
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        buf = _io.BytesIO()
+        writer.write(buf)
+        response = upload(client, owner.email, course["id"], filename="real.pdf", content=buf.getvalue())
+        assert response.status_code == 201
+
+
+class TestChecksumDedup:
+    def test_reuploading_identical_content_returns_the_existing_document(
+        self, client, owner, course, db_session
+    ):
+        content = (PROSE + "\n\nexact same bytes both times").encode()
+        first = upload(client, owner.email, course["id"], content=content)
+        assert first.status_code == 201
+
+        second = upload(
+            client, owner.email, course["id"], filename="different-name.txt", content=content
+        )
+        assert second.status_code == 200
+        assert second.json()["id"] == first.json()["id"]
+
+    def test_dedup_returns_200_not_201(self, client, owner, course, db_session):
+        content = (PROSE + "\n\nfixed content for dedup test").encode()
+        first = upload(client, owner.email, course["id"], content=content)
+        assert first.status_code == 201
+
+        second = upload(client, owner.email, course["id"], filename="renamed.txt", content=content)
+        assert second.status_code == 200
+        assert second.json()["id"] == first.json()["id"]
+
+        assert db_session.query(Document).count() == 1
+
+    def test_dedup_does_not_count_against_the_role_cap(self, client, owner, course):
+        """Re-uploading the same file three times must not exhaust the cap --
+        it is one file, not three."""
+        content = (PROSE + "\n\nsame file every time").encode()
+        for _ in range(5):
+            response = upload(client, owner.email, course["id"], content=content)
+            assert response.status_code in (200, 201)
+
+    def test_different_content_is_not_deduped(self, client, owner, course, db_session):
+        unique_upload(client, owner.email, course["id"])
+        unique_upload(client, owner.email, course["id"])
+        assert db_session.query(Document).count() == 2
+
+    def test_dedup_is_scoped_to_the_course(self, client, owner, db_session):
+        """The same file in two different courses is not a duplicate of itself."""
+        course_a = client.post(
+            "/api/v1/courses", json={"title": "A"}, headers=auth_headers(owner.email)
+        ).json()
+        course_b = client.post(
+            "/api/v1/courses", json={"title": "B"}, headers=auth_headers(owner.email)
+        ).json()
+        content = (PROSE + "\n\nshared across courses").encode()
+
+        first = upload(client, owner.email, course_a["id"], content=content)
+        second = upload(client, owner.email, course_b["id"], content=content)
+
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.json()["id"] != second.json()["id"]
+
+
+class TestPastedText:
+    PASTE_ENDPOINT_TEMPLATE = "/api/v1/courses/{}/documents/paste"
+
+    def test_pastes_text_without_a_file_upload(self, client, owner, course, db_session):
+        response = client.post(
+            self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
+            json={"title": "My Notes", "text": PROSE},
+            headers=auth_headers(owner.email),
+        )
+        assert response.status_code == 201
+        document = db_session.query(Document).one()
+        assert document.source_kind == "PASTED_TEXT"
+        assert document.filename.endswith(".txt")
+
+    def test_pasted_text_is_owned_by_the_caller(self, client, owner, other_user, course):
+        response = client.post(
+            self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
+            json={"text": PROSE},
+            headers=auth_headers(other_user.email),
+        )
+        assert response.status_code == 404  # other_user does not own `course`
+
+    def test_pasted_text_goes_through_the_same_pipeline(self, client, owner, course, db_session):
+        client.post(
+            self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
+            json={"title": "Pasted", "text": PROSE},
+            headers=auth_headers(owner.email),
+        )
+        response = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        )
+        job = client.get(f"/api/v1/jobs/{response.json()['id']}", headers=auth_headers(owner.email)).json()
+        assert job["status"] == "READY"  # reaches the same point as an upload
+        assert db_session.query(Chunk).count() > 0
+
+    def test_rejects_empty_pasted_text(self, client, owner, course):
+        response = client.post(
+            self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
+            json={"text": ""},
+            headers=auth_headers(owner.email),
+        )
+        assert response.status_code == 422  # pydantic min_length, before the service layer
+
+    def test_pasted_text_respects_the_study_file_cap(self, client, owner, course):
+        for i in range(2):
+            response = client.post(
+                self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
+                json={"title": f"Note {i}", "text": f"{PROSE} unique-{i}"},
+                headers=auth_headers(owner.email),
+            )
+            assert response.status_code == 201
+        third = client.post(
+            self.PASTE_ENDPOINT_TEMPLATE.format(course["id"]),
+            json={"title": "Note 3", "text": f"{PROSE} unique-3"},
+            headers=auth_headers(owner.email),
+        )
+        assert third.status_code == 400
+
+
+class TestPipeline:
+    def test_runs_through_all_stages_to_ready(self, client, owner, course, db_session):
+        """
+        All eight frozen-scope stages are implemented as of Phase 2.
+        fake_generation's default response yields zero concepts, which
+        validates trivially, so the pipeline reaches READY end to end.
+        """
+        upload(client, owner.email, course["id"])
+        response = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        )
+        assert response.status_code == 202
+
+        body = client.get(f"/api/v1/jobs/{response.json()['id']}", headers=auth_headers(owner.email)).json()
+        assert body["status"] == "READY"
+
+        done = {s["name"] for s in body["stages"] if s["status"] == "SUCCEEDED"}
+        assert done == {
+            "VALIDATING", "EXTRACTING", "CHUNKING", "INDEXING",
+            "EXTRACTING_CONCEPTS", "BUILDING_GRAPH", "GENERATING_STRUCTURE", "VALIDATING_COURSE",
+        }
+
+    def test_produces_chunks_with_provenance(self, client, owner, course, db_session):
+        upload(client, owner.email, course["id"])
+        client.post(f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email))
+
+        chunks = db_session.query(Chunk).all()
+        assert chunks
+        assert all(c.owner_id == owner.id for c in chunks)
+        assert all(str(c.course_id) == course["id"] for c in chunks)
+        assert all(c.page_start is not None for c in chunks)
+        assert all(c.indexed_at is not None for c in chunks)  # embedded by the fake gateway
+
+    def test_scanned_pdf_lands_on_needs_input_with_a_reason(self, client, owner, course, db_session):
+        """
+        A *valid* PDF with no selectable text -- the shape a scan takes --
+        must say so in plain language, not produce nothing and not be
+        reported as a corrupt file.
+        """
+        import io as _io
+
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        buffer = _io.BytesIO()
+        writer.write(buffer)
+        blank_pdf = buffer.getvalue()
+
+        upload(client, owner.email, course["id"], filename="scan.pdf", content=blank_pdf)
+        response = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        )
+
+        job = client.get(f"/api/v1/jobs/{response.json()['id']}", headers=auth_headers(owner.email)).json()
+        assert job["status"] == "NEEDS_INPUT"
+        document = db_session.query(Document).one()
+        assert document.status == "NEEDS_INPUT"
+        assert "scan" in (document.needs_input_reason or "").lower()
+
+    def test_course_with_no_documents_fails_validation(self, client, owner, course):
+        response = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        )
+        job = client.get(f"/api/v1/jobs/{response.json()['id']}", headers=auth_headers(owner.email)).json()
+        assert job["status"] == "FAILED"
+
+    def test_rerunning_does_not_duplicate_chunks(self, client, owner, course, db_session):
+        """Stage idempotency: retry must not append a second set of chunks."""
+        upload(client, owner.email, course["id"])
+        client.post(f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email))
+        first = db_session.query(Chunk).count()
+
+        client.post(f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email))
+        assert db_session.query(Chunk).count() == first
+
+    def test_rerunning_produces_the_same_chunk_ids(self, client, owner, course, db_session):
+        """
+        The actual point of deterministic ids: not just the same row count,
+        but the identical id set, so a citation recorded elsewhere keeps
+        pointing at the same chunk across a reprocess.
+        """
+        upload(client, owner.email, course["id"])
+        client.post(f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email))
+        first_ids = {c.id for c in db_session.query(Chunk).all()}
+
+        client.post(f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email))
+        second_ids = {c.id for c in db_session.query(Chunk).all()}
+
+        assert first_ids == second_ids
+        assert len(first_ids) > 0
+
+    def test_chunks_carry_token_count_and_char_offsets(self, client, owner, course, db_session):
+        upload(client, owner.email, course["id"])
+        client.post(f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email))
+
+        chunks = db_session.query(Chunk).all()
+        assert chunks
+        for c in chunks:
+            assert c.token_count > 0
+            assert c.char_start is not None and c.char_end is not None
+            assert c.char_start < c.char_end
+            assert c.extraction_version == 1
+
+
+class TestJobOwnership:
+    def test_other_user_cannot_read_your_job(self, client, owner, other_user, course):
+        upload(client, owner.email, course["id"])
+        job_id = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        ).json()["id"]
+
+        response = client.get(f"/api/v1/jobs/{job_id}", headers=auth_headers(other_user.email))
+        assert response.status_code == 404
+
+    def test_other_user_cannot_retry_your_job(self, client, owner, other_user, course):
+        upload(client, owner.email, course["id"])
+        job_id = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        ).json()["id"]
+
+        response = client.post(
+            f"/api/v1/jobs/{job_id}/retry", headers=auth_headers(other_user.email)
+        )
+        assert response.status_code == 404
+
+    def test_owner_can_poll_their_job(self, client, owner, course):
+        upload(client, owner.email, course["id"])
+        job_id = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        ).json()["id"]
+
+        response = client.get(f"/api/v1/jobs/{job_id}", headers=auth_headers(owner.email))
+        assert response.status_code == 200
+        assert len(response.json()["stages"]) == 8
+
+
+class TestLatestJobRecovery:
+    """
+    A page reload (or navigating away and back) loses whatever job id the
+    frontend held in memory -- this is the only way it can recover "is this
+    course mid-processing, paused, or untouched" without one. Reproduced
+    live: a course stuck PAUSED had no way back to it from the workspace
+    page after a reload, which fell back to showing a fresh "Generate
+    Curriculum" button as if nothing had ever run.
+    """
+
+    def test_never_processed_returns_null_not_404(self, client, owner, course):
+        response = client.get(
+            f"/api/v1/courses/{course['id']}/jobs/latest", headers=auth_headers(owner.email)
+        )
+        assert response.status_code == 200
+        assert response.json() is None
+
+    def test_returns_the_most_recently_created_job(self, client, owner, course, db_session):
+        upload(client, owner.email, course["id"])
+        first_id = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        ).json()["id"]
+
+        # A second job for the same course (e.g. a retry-by-reprocessing
+        # after the first one finished) must be the one returned. Explicit,
+        # distinct created_at values: SQLite's CURRENT_TIMESTAMP (what
+        # func.now() compiles to for this test's in-memory engine) is only
+        # second-resolution, so two inserts in the same test can tie --
+        # Postgres's microsecond resolution never does in practice, but the
+        # ordering itself must not depend on that difference to be correct.
+        from datetime import datetime, timedelta, timezone
+
+        from app.modules.jobs.models import JobStatus, ProcessingJob
+        from uuid import UUID as _UUID
+
+        now = datetime.now(timezone.utc)
+        db_session.query(ProcessingJob).filter(ProcessingJob.id == _UUID(first_id)).update(
+            {"status": JobStatus.READY.value, "created_at": now}
+        )
+        db_session.commit()
+        second = ProcessingJob(
+            course_id=_UUID(course["id"]), owner_id=owner.id, status=JobStatus.PENDING.value,
+            created_at=now + timedelta(seconds=1),
+        )
+        db_session.add(second)
+        db_session.commit()
+
+        response = client.get(
+            f"/api/v1/courses/{course['id']}/jobs/latest", headers=auth_headers(owner.email)
+        )
+        assert response.status_code == 200
+        assert response.json()["id"] == str(second.id)
+
+    def test_other_user_gets_404_not_someone_elses_job(self, client, owner, other_user, course):
+        upload(client, owner.email, course["id"])
+        client.post(f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email))
+
+        response = client.get(
+            f"/api/v1/courses/{course['id']}/jobs/latest", headers=auth_headers(other_user.email)
+        )
+        assert response.status_code == 404
+
+    def test_unknown_course_is_404(self, client, owner):
+        import uuid
+
+        response = client.get(
+            f"/api/v1/courses/{uuid.uuid4()}/jobs/latest", headers=auth_headers(owner.email)
+        )
+        assert response.status_code == 404
+
+
+class TestConcurrentProcessingIsRejected:
+    """
+    Reproduces live: a UI double/triple-click (no loading feedback on the
+    button) sent overlapping POST .../process requests for the same
+    course. Both passed the "does this chunk id already exist" check
+    before either had committed, then both tried to INSERT the same
+    deterministic chunk id -- a real IntegrityError. The fix rejects a
+    second call outright while one is already active, rather than letting
+    two pipeline runs race.
+    """
+
+    def test_a_second_process_call_while_one_is_active_is_rejected(self, client, owner, course, db_session):
+        from app.modules.jobs.models import JobStatus, ProcessingJob
+
+        upload(client, owner.email, course["id"])
+        # Simulate the first call's job already being RUNNING (rather than
+        # racing two real threads, which pytest's synchronous TestClient
+        # can't reproduce deterministically) -- this exercises the exact
+        # guard that closes the race, regardless of how "active" was reached.
+        from uuid import UUID as _UUID
+
+        db_session.add(ProcessingJob(course_id=_UUID(course["id"]), owner_id=owner.id, status=JobStatus.RUNNING.value))
+        db_session.commit()
+
+        response = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        )
+        assert response.status_code == 409
+        assert response.headers["content-type"] == "application/problem+json"
+        assert "already" in response.json()["detail"].lower()
+
+    def test_a_process_call_after_the_previous_job_finished_is_allowed(self, client, owner, course, db_session):
+        from app.modules.jobs.models import JobStatus, ProcessingJob
+
+        upload(client, owner.email, course["id"])
+        from uuid import UUID as _UUID
+
+        db_session.add(ProcessingJob(course_id=_UUID(course["id"]), owner_id=owner.id, status=JobStatus.READY.value))
+        db_session.commit()
+
+        response = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        )
+        assert response.status_code != 409
+
+
+class TestOrphanedJobReconciledOnStartup:
+    """
+    jobs/service.py runs the pipeline in-process, not on a queue (see that
+    module's docstring), so a job stuck PENDING/RUNNING can only mean the
+    process that owned it died mid-run (crash, OOM, container restart)
+    before marking it FAILED. Without the app.main lifespan's reconciliation,
+    that stuck job would block every future /process call for the course
+    with a 409 forever, since no other process is ever coming back to finish
+    it -- reproduced live after a backend OOM crash left a job RUNNING.
+    """
+
+    def test_a_stale_running_job_is_marked_failed_on_restart(self, client, owner, course, db_session):
+        from uuid import UUID as _UUID
+
+        from app.modules.courses.models import Course, CourseStatus
+        from app.modules.jobs.models import (
+            JobStatus,
+            ProcessingJob,
+            ProcessingStage,
+            ProcessingStageName,
+            StageStatus,
+        )
+
+        job = ProcessingJob(
+            course_id=_UUID(course["id"]),
+            owner_id=owner.id,
+            status=JobStatus.RUNNING.value,
+            current_stage=ProcessingStageName.INDEXING.value,
+        )
+        db_session.add(job)
+        db_session.flush()
+        stage = ProcessingStage(
+            job_id=job.id,
+            name=ProcessingStageName.INDEXING.value,
+            position=3,
+            status=StageStatus.RUNNING.value,
+        )
+        db_session.add(stage)
+        db_session.commit()
+
+        # Simulate the backend restarting: re-run app.main's lifespan on the
+        # same app instance. dependency_overrides from the `client` fixture
+        # still point get_db at this same db_session, so this reconciles the
+        # job just inserted above rather than a real database.
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        with TestClient(app):
+            pass
+
+        db_session.refresh(job)
+        assert job.status == JobStatus.FAILED.value
+        assert job.error_category == "INTERRUPTED"
+
+        db_session.refresh(stage)
+        assert stage.status == StageStatus.FAILED.value
+
+        reconciled_course = db_session.query(Course).filter(Course.id == job.course_id).first()
+        assert reconciled_course.status == CourseStatus.FAILED.value
+
+        # The course is no longer blocked: a fresh /process call is accepted.
+        response = client.post(
+            f"/api/v1/courses/{course['id']}/process", headers=auth_headers(owner.email)
+        )
+        assert response.status_code != 409
