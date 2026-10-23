@@ -1,5 +1,13 @@
 # NeuroLearn — Implementation Status
 
+> **HISTORICAL SNAPSHOT — superseded.** This is the Phase 0 audit of 2026-08-26/27,
+> taken when the repository was a chat prototype. Nearly every "Planned-but-absent"
+> and "Broken" finding below has since been addressed (courses, ingestion,
+> retrieval, curriculum, mastery, adaptation, tutor, tests, evidence paths). Do not
+> read it as current state. For the as-built description see
+> [SYSTEM_ARCHITECTURE.md](../SYSTEM_ARCHITECTURE.md) §5.
+
+
 **Phase 0 audit. Documentation only.**
 Audited: 2026-08-26 / 2026-08-27. Verified by direct file inspection against the
 working tree.

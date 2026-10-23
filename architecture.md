@@ -1,383 +1,358 @@
 # NeuroLearn — Architecture
 
-Status: frozen architecture for the one-week prototype.
+Last verified against the code: **2026-10-24**, by inspection of the working tree
+(the test suite was not executed for this pass).
 
-Read `frozen-scope.md` for product behavior and limitations. This document owns service boundaries, data ownership, deployment topology, processing flows, and technology justification.
+Scope split of the docs: `frozen-scope.md` owns product behavior and limits; this
+file owns service boundaries, data ownership, flows, and the target topology;
+`SYSTEM_ARCHITECTURE.md` owns status, known issues and invariants.
+
+**How to read this file.** Parts 1–7 describe what the repository does **today**.
+Part 8 keeps the frozen **target** design from `AGENTS.md` §5 (Supabase, Celery,
+Neo4j, Judge0, Railway/Vercel). Nothing in Part 8 is implemented unless Part 1
+says so. Where the two differ, `AGENTS.md` wins until a human ratifies a change;
+the differences are flagged, not resolved.
 
 ## Architectural drivers
 
 1. Execute a real upload-to-adaptation loop on unseen material.
 2. Keep generated claims confined to course-owned sources.
-3. Make long-running document work resumable and observable.
+3. Make long-running document work observable and retryable.
 4. Keep recommendation selection deterministic and testable.
-5. Preserve enough version and outcome history for evaluation.
-6. Isolate untrusted Python execution from product data and secrets.
-7. Remain viable for a three-person, one-week prototype with near-zero operating cost.
+5. Preserve version and outcome history for evaluation.
+6. Stay viable for a three-person prototype with near-zero operating cost.
 
-## System context
+---
+
+# Part A — As built
+
+## 1. System context and topology
 
 ```mermaid
 flowchart TD
-    Learner["Learner browser"] --> Web["Next.js web"]
-    Web --> API["FastAPI API"]
-    API --> Data["Supabase platform"]
-    API --> Queue["Upstash Redis"]
-    Worker["Celery worker"] --> Queue
-    Worker --> Data
-    Worker --> AI["Gemini API"]
-    Worker --> Graph["Neo4j AuraDB"]
-    API --> Graph
-    API --> Judge["Judge0 services"]
+    Learner["Learner browser"] --> Web["Next.js (BFF route handlers)"]
+    Web -->|"x-internal-token + user identity"| API["FastAPI /api/v1"]
+    API --> PG[("PostgreSQL 16")]
+    API --> Q[("Qdrant")]
+    API --> Disk["Local upload volume"]
+    API --> Gem["Gemini API (generation, embeddings)"]
+    API --> Groq["Groq (legacy chat only)"]
+    API -. "BackgroundTasks, in-process" .-> Pipe["Processing pipeline"]
+    Pipe --> PG
+    Pipe --> Q
+    Pipe --> Gem
 ```
 
-## Deployment topology
-
-| Component | Deployment | Responsibility |
+| Component | Where it runs | Responsibility |
 |---|---|---|
-| Next.js web | Vercel Hobby | Learner and evaluator UI |
-| FastAPI API | Railway Hobby | REST API, authorization, orchestration, polling |
-| Celery worker | Railway Hobby | Durable document, generation, validation, projection jobs |
-| Application Redis | Upstash Free | Celery broker/result coordination |
-| PostgreSQL/pgvector | Supabase Free | Product source of truth, chunks, vectors, histories |
-| Auth | Supabase Auth | Google OIDC identity and sessions |
-| Object storage | Supabase Storage | Private originals and derived page/asset objects |
-| Prerequisite graph | Neo4j AuraDB Free | Disposable graph projection and traversal |
-| Judge0 server/workers | Railway services | Networkless Python submission execution |
-| Judge0 backing data | Dedicated Railway PostgreSQL and Redis services | Judge0-internal queue and state; never product data |
-| Generation/vision/embeddings | Gemini API free tier | `gemini-2.5-flash-lite` generation/multimodal/validation and `gemini-embedding-001` embeddings |
+| Next.js 16 web | Docker Compose, host :3001 (or `npm run dev` :3000) | UI, NextAuth Google sign-in, route handlers that hold the internal token |
+| FastAPI API | Docker Compose, host :8001 | REST API, authorization, orchestration, background pipeline |
+| PostgreSQL 16 | Compose `db`, host :5433 | Authoritative product state, chunks, jobs, mastery, decisions |
+| Qdrant 1.12 | Compose `qdrant`, :6333 | Derived vector index; rebuildable from PostgreSQL chunks |
+| Upload volume | Compose `uploaded_documents` → `/app/var/uploads` | Original files; served only via an authenticated owner-checked endpoint |
+| Gemini | External | Generation (`GEMINI_GENERATION_MODEL`, default `gemini-3.5-flash-lite`) and embeddings (`gemini-embedding-001`) |
+| Groq | External | Legacy chat path only (`GROQ_MODEL`) |
 
-Railway is budgeted at the Hobby minimum rather than assumed to remain within the $1 monthly free-resource allowance.
+There is **no** queue, worker process, object storage, graph database, code
+sandbox, or deployed environment. Docker Compose is the only topology.
 
-### Judge0 deployment risk
+## 2. Trust and identity
 
-Judge0's standard deployment expects several Docker Compose services. The frozen plan decomposes its official images into Railway services with dedicated backing stores. This is the highest-risk infrastructure assumption and receives a day-one spike. Failure of that spike blocks Python assessment but must not destabilize the API, worker, or application Redis.
+- NextAuth (Google) authenticates the browser. On sign-in the web server calls
+  `POST /auth/sync`.
+- Browser calls reach the API only through Next.js route handlers or server
+  components, which attach `INTERNAL_API_KEY` and the session user's email.
+- FastAPI resolves identity in `app.core.security.get_current_user` from those
+  trusted headers. **Known issue K-4:** anyone holding the shared token can claim
+  any email; this is acceptable only while the BFF is the sole caller. Per-user
+  tokens are not built.
+- `INTERNAL_API_KEY` and `SECRET_KEY` are required, ≥ 32 characters, and known
+  placeholders are rejected at startup (`app/core/config.py`).
+- Non-owned resources return 404, never 403. Owner and course filters live inside
+  service/repository queries.
 
-## Module boundaries
+## 3. Backend modules
 
-### Web application
-
-- Authentication callback and session bootstrap.
-- Setup/upload, processing status, course review, graph editing, diagnostic, learning workspace, progress, and evaluation screens.
-- Typed API client; no direct domain mutations against Supabase.
-- Polling for job state; no WebSocket dependency.
-
-### API application
-
-The FastAPI service is a modular monolith:
+FastAPI modular monolith, one package per domain under `backend/app/modules/`
+(`models.py`, `router.py`, `schemas.py`, `service.py` where applicable). Routes
+stay thin; services own logic.
 
 | Module | Owns |
 |---|---|
-| Identity | Supabase token verification, user mapping, admin authorization |
-| Courses | Course lifecycle, immutable source set, published course version |
-| Documents | Upload intents, private object metadata, signed read access |
-| Jobs | Job creation, status projection, retry authorization |
-| Curriculum | Modules, lessons, concepts, graph edits and versions |
-| Learning | Current activity, interruption state, course completion |
-| Assessments | Blueprints, question delivery, submissions, feedback |
-| Mastery | Evidence application, mastery and uncertainty state/history |
-| Recommendations | Candidate construction, deterministic scoring, tie-breaking |
-| Tutor | Course-scoped retrieval request and grounded response contract |
-| Evaluation | Admin-only metrics, traces, simulated profiles and pilot records |
-| Quotas | Per-user resource and model-call limits |
+| `auth`, `identity` | User sync; `GET/PATCH/DELETE /me` (profile, tracking consent, account deletion); health |
+| `courses` | Course lifecycle, `finalize-sources` |
+| `documents` | Upload and paste, validation, chunking with provenance, owner-only content download |
+| `jobs` | `processing_jobs` / `processing_stages`, start / retry / latest-job recovery, paused-with-reason state |
+| `retrieval` | Course-scoped hybrid search (vector + lexical), chunk detail for citations |
+| `curriculum` | Concept extraction, prerequisite edges, graph checks, modules/lessons, validation, structure edit and publish |
+| `assessment` | Legacy `quiz_attempts` with server-side grading |
+| `mastery` | Diagnostic question generation, grading, evidence application, mastery report |
+| `adaptation` | Candidate construction, deterministic scoring, presentation affinity, decision and outcome logging |
+| `tutor` | Grounded answers and lesson content with citation validation |
+| `evaluation` | Experiments, conditions, cohort assignment, metrics export |
+| `abuse`, `audit`, `privacy` | Per-user AI-call budget and rate limits; audit log; consent and deletion |
+| `events` | `POST /events/batch` learner telemetry (suppressed under `minimal` consent) |
+| `profile`, `chat`, `content` | Legacy: FSLSM vector profile, Groq chat, articles |
+| `profiling` | Models only (`UserProfile`) |
 
-Modules communicate through explicit service interfaces and domain identifiers. Routes do not write database tables directly.
+Pure, infrastructure-free engines: mastery (`mastery/engine.py`), candidate
+scoring and tie-break (`adaptation/policy.py`, `scoring.py`, `readiness.py`),
+curriculum graph checks (`curriculum/graph.py`). They take values and return
+values; persistence wraps them.
 
-### Worker application
+### AI gateways
 
-Celery tasks call the same domain services through worker-safe application interfaces. Tasks are idempotent and keyed by job, stage, course version, document version, and generated-artifact version.
+Provider SDK calls sit behind interfaces in `backend/app/services/`:
+`generation/` (`GenerationGateway`, Gemini, fake), `embedding/`
+(`EmbeddingGateway`, Gemini, fake), `vectorstore/` (`VectorStore`, Qdrant, fake).
+Tests run on the fakes and spend no quota. Model ids are settings. Outputs cross
+typed Pydantic schemas before entering domain state. The legacy chat path
+(`chat/router.py`, `services/adaptation.py`) still calls Groq directly (K-12), and
+no call records token counts or latency (`AIUsageDaily` counts calls only).
 
-Worker pipelines:
+## 4. Primary flows
 
-- Document extraction and visual interpretation.
-- Structure-aware chunking and embedding.
-- Syllabus, concept, hierarchy, and prerequisite generation.
-- Graph structural validation and Neo4j projection.
-- Lesson and assessment generation.
-- Separate question and citation validation.
-- Generated test-pair equivalence validation.
-- Evaluation aggregation.
-
-### Recommendation engine
-
-This is a pure domain module with one high-level seam:
-
-```text
-recommend(learner_state, course_state, activity_history)
-→ selected_activity + candidate_scores + reason_features
-```
-
-It has no network, database, or model dependency. Persistence and presentation wrap this seam.
-
-### Mastery engine
-
-This is also pure:
-
-```text
-apply_evidence(previous_state, binary_correctness, estimated_difficulty)
-→ mastery_state + uncertainty_state + evidence_record
-```
-
-Unknown state, independent-evidence rules, completion thresholds, and history creation are tested through this interface.
-
-### Retrieval/generation gateway
-
-All AI operations pass through typed gateways:
-
-- `EmbeddingGateway`
-- `GenerationGateway`
-- `MultimodalGateway`
-- `ValidationGateway`
-
-P0 adapters use `gemini-2.5-flash-lite` and `gemini-embedding-001`. Every request records purpose, model, prompt/schema version, latency, token usage, outcome, and artifact version without logging source content.
-
-## Primary flows
-
-### Upload and course publication
+### 4.1 Upload to published course
 
 ```mermaid
 sequenceDiagram
     participant W as Web
     participant A as API
-    participant S as Supabase
-    participant R as Redis
-    participant K as Worker
+    participant P as Pipeline (background task)
+    participant D as PostgreSQL / Qdrant / Gemini
 
-    W->>A: Create course and upload intents
-    A->>S: Create draft course and signed uploads
-    W->>S: Upload private objects
-    W->>A: Finalize immutable source set
-    A->>R: Enqueue course processing
-    A-->>W: Job ID
-    K->>R: Claim stage
-    K->>S: Write versioned stage outputs
-    W->>A: Poll job status
-    K->>S: Publish validated course version
-    A-->>W: READY and review data
+    W->>A: POST /courses, POST /courses/{id}/documents (or /paste)
+    A->>D: Validate (type, magic bytes, size, pages) and store original
+    W->>A: POST /courses/{id}/finalize-sources
+    W->>A: POST /courses/{id}/process
+    A-->>W: 202 + job id
+    A->>P: BackgroundTasks.add_task
+    P->>D: Stages in order, each persisted
+    W->>A: Poll GET /jobs/{id} or /courses/{id}/jobs/latest
+    P->>D: Validated course version
+    W->>A: GET /courses/{id}/structure, /graph
+    W->>A: POST /courses/{id}/publish-structure
 ```
 
-### Grounded tutor response
+Stages run in order (`ProcessingStageName`): `VALIDATING`, `EXTRACTING`,
+`CHUNKING`, `INDEXING`, `EXTRACTING_CONCEPTS`,
+`BUILDING_GRAPH`, `GENERATING_STRUCTURE`, `VALIDATING_COURSE`. Job states:
+`PENDING`, `RUNNING`, `READY`, `NEEDS_INPUT`, `FAILED`, `PAUSED` (provider
+quota/availability; manual retry). A course version is activated only after
+validation, including that every concept source resolves to a real chunk owned by
+the caller.
+
+Limits: extraction is `pypdf` text only (no OCR; scanned PDFs are not
+supported); 25 MB per file; 500 pages; per-role file caps (syllabus files and at most 2 study files);
+DOCX/PPTX rejected. `INTERPRETING_VISUALS` is declared in the enum but skipped
+and absent from the run order; no multimodal extraction is implemented.
+
+Durability: the pipeline runs inside the API process. If the process dies, work
+stops. On startup, jobs left `PENDING`/`RUNNING` are marked `FAILED`
+(`INTERRUPTED`) so a new `/process` call is not blocked.
+
+### 4.2 Grounded retrieval and tutor
 
 ```mermaid
 flowchart TD
-    Q["Learner question"] --> F["Owner + course filters"]
-    F --> H["Lexical + vector retrieval"]
-    H --> R["Rerank + deduplicate"]
-    R --> G["Source-only generation"]
-    G --> V["Existence + ownership + support validation"]
-    V -->|pass| A["Answer with document/page citations"]
-    V -->|fail| X["Regenerate or abstain"]
+    Q["Question"] --> O["Owner + course check"]
+    O --> V["Vector search (Qdrant, owner/course filter)"]
+    O --> L["Lexical search (PostgreSQL)"]
+    V --> M["Merge, hydrate with owner/course filter re-applied"]
+    L --> M
+    M --> G["Source-only generation (top N chunks)"]
+    G --> T1["Tier 1: citation exists + owned"]
+    T1 --> T2["Tier 2: semantic entailment (sampled)"]
+    T2 -->|pass| A["Answer with document/page citations"]
+    T2 -->|fail| X["Regenerate within bound, then abstain"]
 ```
 
-### Assessment to next activity
+Embedding or vector-store failure degrades to lexical-only; it never widens what
+is returned. Merge is by best single score, not a fused ranking, and there is no
+reranker. Tier-2 entailment is sampled, not exhaustive. Retrieved text is
+delimited and labeled as untrusted in every prompt (`core/prompt_safety.py`).
+
+### 4.3 Assessment to next activity
 
 ```mermaid
 flowchart TD
-    Submit["One-shot submission"] --> Grade["Type-specific binary grading"]
-    Grade --> Evidence["Mastery evidence"]
-    Evidence --> State["Mastery + uncertainty update"]
-    State --> Candidates["Eligible activity candidates"]
-    Candidates --> Score["Deterministic scoring"]
-    Score --> Select["Fixed tie-break selection"]
-    Select --> Trace["Decision/outcome trace"]
+    D["POST /courses/{id}/diagnostic"] --> Ans["POST /questions/{id}/attempts"]
+    Ans --> Grade["Server-side grading"]
+    Grade --> Ev["Mastery event"]
+    Ev --> State["Mastery + uncertainty (engine.py)"]
+    State --> Cand["Candidates"]
+    Cand --> Score["Deterministic scoring (policy.py)"]
+    Score --> Dec["AdaptationDecision persisted with reasons"]
+    Dec --> Serve["GET /courses/{id}/next-activity"]
+    Serve --> Out["Outcomes: engagement, helpfulness, assessment"]
 ```
 
-## Data ownership and schema
+`AdaptationDecision` (what was chosen and why, written before serving) and
+`AdaptationOutcome` (what happened later) are separate tables and must stay
+separate. Adaptation uses per-concept mastery and per-variant presentation
+affinity; no learning-style label drives it.
 
-PostgreSQL is the only durable product source of truth. Neo4j can be rebuilt from a published graph version. Redis contains coordination state, not authoritative product state.
+All weights and thresholds are named constants with a policy version
+(`mastery-v1`, `adaptive-policy-v1`, `diagnostic-v1`, `tutor-prompt-v1`) and are
+**unvalidated defaults** — hand-chosen, not calibrated. No learning-gain or
+quality figure exists for them. See `docs/adaptation-spec.md`.
 
-### Identity and access
+## 5. Data ownership
 
-- `users`: Supabase user ID, email, profile, role, created time.
-- `pilot_participants`: pseudonymous participant ID, consent state, enrollment state.
+PostgreSQL is the only authoritative store. Qdrant is a derived index and must be
+rebuildable from `chunks`. Schema changes ship only as Alembic migrations (linear
+chain, head `f7b3d29e1c64`); `create_all` is not used.
 
-### Courses and sources
-
-- `courses`: owner, title, goal, confidence, status, published version.
-- `course_priorities`: prioritized or excluded module/topic labels.
-- `documents`: course, storage object, format, role, size, page count, immutable version.
-- `document_pages`: page number, extraction status, text, OCR/visual confidence.
-- `source_assets`: page, type, bounding metadata, private object, interpretation.
-- `processing_jobs`: owner, course, overall status, retry count, current stage.
-- `processing_stages`: job, stage, status, attempts, timestamps, safe error category.
-
-### Retrieval
-
-- `chunks`: course, document, page range, heading path, content type, text, provenance.
-- `chunk_embeddings`: chunk, embedding model, vector dimension, vector.
-- `retrieval_traces`: query purpose, selected chunk IDs, scores, reranker version, latency.
-
-### Curriculum and graph
-
-- `course_versions`: draft/published state, schema version, source-set fingerprint.
-- `modules`: version, order, title, syllabus provenance.
-- `lessons`: module, order, title, objectives.
-- `concepts`: lesson, title, description, confidence, source provenance.
-- `prerequisite_edges`: graph version, prerequisite concept, dependent concept, confidence, provenance.
-- `graph_versions`: course version, projection status, validation result.
-- `content_gaps`: syllabus topic, reason, resolution state.
-
-### Generated content and assessments
-
-- `generated_artifacts`: course/concept, purpose, prompt/schema/model version, content, validation status.
-- `citations`: artifact/claim, chunk, document, page, support status.
-- `assessment_blueprints`: course/concept coverage, type and difficulty plan.
-- `questions`: blueprint, concept, type, prompt, expected answer/tests, difficulty, artifact version.
-- `question_validations`: support, answerability, duplication, equivalence, validator metadata.
-- `attempts`: learner, question, submitted value/code, binary result, response duration.
-
-### Adaptation
-
-- `mastery_states`: learner, concept, optional mastery, uncertainty, evidence count.
-- `mastery_events`: attempt, prior/current state, active evidence factors.
-- `presentation_affinities`: learner, format, affinity, uncertainty, observation count.
-- `activity_instances`: learner, activity type, concept, state, artifact version.
-- `adaptation_decisions`: candidate scores, selected activity, reason features, rule version.
-- `adaptation_outcomes`: decision, subsequent attempt, mastery change.
-
-### Evaluation
-
-- `pilot_sessions`: participant, session type, timestamps.
-- `pre_post_pairs`: participant, concepts, equivalence-validation result, score delta.
-- `simulated_profiles`: fixture state and expected decision.
-- `evaluation_runs`: metric definitions, thresholds, inputs, results, version.
-- `security_events`: anonymized category, component, blocked/allowed result.
-
-### JSONB policy
-
-Core identity, ownership, lifecycle, relationships, and score fields are relational. Variable AI payloads, candidate arrays, validation details, provider metadata, and evaluation evidence use JSONB with an explicit schema version.
-
-## Cross-store consistency
-
-1. Commit the authoritative graph version and edges in PostgreSQL.
-2. Enqueue a projection task keyed by graph version.
-3. Upsert Neo4j nodes and edges with course, owner, and graph-version identifiers.
-4. Mark projection success in PostgreSQL.
-5. Serve graph traversal only for the current successfully projected version.
-6. Rebuild Neo4j from PostgreSQL when versions diverge.
-
-No distributed transaction is required.
-
-## API surface
-
-### Identity and courses
-
-- `GET /me`
-- `POST /courses`
-- `GET /courses`
-- `GET /courses/{courseId}`
-- `DELETE /courses/{courseId}`
-- `POST /courses/{courseId}/uploads`
-- `POST /courses/{courseId}/finalize-sources`
-
-### Processing and structure
-
-- `GET /jobs/{jobId}`
-- `POST /jobs/{jobId}/retry`
-- `GET /courses/{courseId}/structure`
-- `PUT /courses/{courseId}/structure`
-- `GET /courses/{courseId}/graph`
-- `PUT /courses/{courseId}/graph`
-- `POST /courses/{courseId}/publish-structure`
-
-### Learning
-
-- `POST /courses/{courseId}/diagnostic/start`
-- `POST /attempts`
-- `GET /courses/{courseId}/next-activity`
-- `GET /activities/{activityId}`
-- `POST /activities/{activityId}/rating`
-- `POST /courses/{courseId}/tutor`
-- `GET /courses/{courseId}/progress`
-
-### Evaluation
-
-- `GET /admin/evaluation/summary`
-- `GET /admin/evaluation/runs/{runId}`
-- `POST /admin/evaluation/simulations/run`
-
-Exact payloads live in the shared OpenAPI-generated contracts; the API specification is authoritative.
-
-## Security and trust boundaries
-
-- The browser never receives service credentials.
-- Supabase objects remain private; API-authorized short-lived signed URLs permit access.
-- The worker alone receives direct processing access to source objects.
-- Every API service and retrieval query verifies user and course ownership.
-- Retrieved source text is untrusted model data and has no tool capability.
-- Judge0 receives only code, harness, language, and limits; it receives no product JWT, database URL, object URL, or AI key.
-- Judge0 has no outbound network access.
-- Logs exclude document content, learner answers, tokens, and signed URLs.
-- P0 accepts the consciously limited extension-only upload validation and lack of malware scanning documented in scope.
-
-## Failure model
-
-| Failure | Required behavior |
+| Area | Tables |
 |---|---|
-| Invalid extension or documented size/page limit | Reject before enqueue |
-| Extraction or generation stage fails | Preserve prior stages; mark failed; allow manual retry |
-| Gemini quota/unavailable | Pause job; expose retryable provider error |
-| Citation support fails | Bounded regeneration, then abstention |
-| Graph contains a cycle | Block course readiness until learner edit/regeneration |
-| Neo4j projection fails | Keep PostgreSQL version authoritative; retry projection |
-| Judge0 unavailable | Mark Python assessment unavailable; leave mastery uncertain |
-| Redis task redelivery | Idempotent stage reuses or safely replaces its draft output |
-| Browser disconnects | Job continues; polling resumes on return |
-| Account deletion | Cascade product data and issue object/graph deletion jobs |
+| Identity / legacy | `users`, `user_profiles`, `articles`, `paragraphs`, `article_readings`, `chat_sessions`, `chat_messages` (integer keys) |
+| Courses and sources | `courses`, `documents`, `chunks` (with page, heading path, char offsets), `processing_jobs`, `processing_stages` |
+| Curriculum | `course_versions`, `concepts`, `concept_sources`, `concept_prerequisites`, `modules`, `lessons`, `lesson_concepts`, `assessment_blueprints` |
+| Assessment and mastery | `questions`, `question_concepts`, `question_attempts`, `mastery_events`, `quiz_attempts` |
+| Adaptation | `adaptation_decisions`, `adaptation_outcomes`, `presentation_affinities` |
+| Tutor | `tutor_messages` |
+| Governance and evaluation | `learning_events`, `ai_usage_daily`, `audit_logs`, `experiments`, `experiment_conditions`, `cohort_assignments` |
 
-## Test seams
+New tables use UUID keys. Per-concept mastery is derived from `mastery_events`,
+not stored as its own table. Citations are validated at answer time against
+`chunks`, not persisted as rows. Account deletion is explicit ordered deletes in
+`PrivacyService.delete_account`; a new table must be added there by hand.
 
-Prefer the highest observable seam:
+## 6. API surface (as registered)
 
-1. End-to-end golden path against two unseen document sets.
-2. API integration tests through HTTP with real PostgreSQL/pgvector, Redis, and Neo4j containers.
-3. Processing pipeline contract tests using fixed source fixtures and stubbed Gemini responses.
-4. Retrieval tests through the course-scoped retrieval interface.
-5. Pure mastery and recommendation engine tests without infrastructure.
-6. Judge0 adapter contract tests against the deployed/local service.
-7. Browser tests for sign-in boundary, polling, review, diagnostic, learning, and progress.
+All under `/api/v1`. FastAPI OpenAPI (`/docs`) is authoritative for payloads.
 
-Tests assert external behavior and durable state, not internal method calls.
+- **Identity:** `POST /auth/sync`; `GET /me`, `PATCH /me/consent`, `DELETE /me`.
+- **Courses:** `POST/GET /courses`, `GET/PATCH/DELETE /courses/{id}`,
+  `POST /courses/{id}/finalize-sources`.
+- **Documents:** `POST /courses/{id}/documents`, `.../documents/paste`,
+  `GET /courses/{id}/documents`, `GET /documents/{id}/content`.
+- **Jobs:** `POST /courses/{id}/process`, `GET /jobs/{id}`,
+  `GET /courses/{id}/jobs/latest`, `POST /jobs/{id}/retry`.
+- **Curriculum:** `GET/PUT /courses/{id}/structure`, `GET /courses/{id}/graph`,
+  `POST /courses/{id}/publish-structure`. (`PUT` graph edits: not built.)
+- **Retrieval and tutor:** `GET /courses/{id}/retrieval`,
+  `GET /courses/{id}/chunks/{chunkId}`, `POST /courses/{id}/tutor`,
+  `GET /courses/{id}/lessons/{lessonId}/content`.
+- **Mastery:** `POST /courses/{id}/diagnostic`,
+  `POST /questions/{id}/attempts`, `GET /courses/{id}/mastery-report`.
+- **Adaptation:** `GET /courses/{id}/next-activity`,
+  `GET /courses/{id}/adaptation-history`,
+  `POST /courses/{id}/adaptation-decisions/{decisionId}/outcomes/{engagement|helpfulness|assessment}`,
+  `POST /presentation-affinity/{outcome|switch|reset}`.
+- **Evaluation:** `POST /evaluation/experiments`,
+  `GET .../experiments/{id}/conditions`, `POST .../assign`,
+  `GET .../my-condition`.
+- **Legacy / telemetry:** `/profile/*` (FSLSM), `/chat/*`, `/content/articles/{id}`,
+  `POST /events/batch`, `POST/GET /quiz-attempts`.
 
-## Technology justification
+Errors use RFC 7807 problem details. Generated TypeScript types from OpenAPI are
+not set up; the frontend client is handwritten (`frontend/lib/api.ts`).
 
-| Technology | Requirement served | Why selected |
+## 7. Security, failure model, tests
+
+Security posture and residual risk per threat class: `docs/SECURITY.md`. Key
+properties: owner filter inside every query; magic-byte and size/page limits on
+uploads; no malware scanning; untrusted text delimited in all prompts (a 12-attempt
+injection measurement found 0 successes on one model on one day — not a claim of
+prevention); per-user AI budget, regeneration cap, burst and concurrency limits
+that are **in-process** (correct for one replica only); logs must exclude
+document content, answers, tokens and signed URLs.
+
+| Failure | Behavior today |
+|---|---|
+| Invalid type, size or page count | Rejected before processing |
+| Stage fails | Earlier stages kept; job `FAILED`; manual retry |
+| Gemini quota / unavailable | Job `PAUSED` with an authored reason; manual retry |
+| Citation support fails | Bounded regeneration, then abstain |
+| Graph structurally invalid | Course not activated until fixed |
+| Vector store or embedding error at query time | Lexical-only results |
+| Process crash mid-job | Job marked `FAILED/INTERRUPTED` at next startup |
+| Account deletion | Synchronous ordered delete of all owned rows; audit entry survives |
+
+Test layers (`backend/tests/`): `unit` (pure engines, gateways, parsing),
+`service` (domain services on an isolated database), `api` (routes through
+`TestClient`), `security`, `evaluation`. Tests use fake gateways; the suite
+database is SQLite, so PostgreSQL-only behavior (e.g. `tsvector` ranking) is not
+covered by it. There are no browser tests and no frontend test runner. The last
+recorded count is in `SPRINT_LOG.md`.
+
+---
+
+# Part B — Target design (frozen, not implemented)
+
+Kept from the original frozen plan. Treat every item here as **designed, not
+built** except where Part A already provides the equivalent.
+
+## 8. Target topology and deviations
+
+```mermaid
+flowchart TD
+    Learner["Learner browser"] --> Web["Next.js on Vercel"]
+    Web --> API["FastAPI on Railway"]
+    API --> Data["Supabase (Auth, PostgreSQL/pgvector, Storage)"]
+    API --> Queue["Upstash Redis"]
+    Worker["Celery worker on Railway"] --> Queue
+    Worker --> Data
+    Worker --> AI["Gemini API"]
+    Worker --> Graph["Neo4j AuraDB (projection)"]
+    API --> Graph
+    API --> Judge["Judge0 on Railway"]
+```
+
+| Target element | Today | Gap to close |
 |---|---|---|
-| Next.js/TypeScript | Polished multi-surface web app | Fast component development, typed UI, strong deployment path |
-| Tailwind + shadcn/ui | Presentable one-week UI | Reusable accessible primitives without custom design-system overhead |
-| React Flow | Editable prerequisite graph | Purpose-built node/edge interaction |
-| FastAPI/Pydantic | Typed API and AI schemas | Python ecosystem plus strict request/model-output validation |
-| SQLAlchemy/Alembic | Relational persistence and migrations | Explicit schema ownership and repeatable database connectivity |
-| Docling/RapidOCR | Multi-format extraction and local OCR | Unified representation across required formats and reduced model calls |
-| Supabase | Auth, PostgreSQL, pgvector, storage | Consolidates four managed services with a prototype free tier |
-| Upstash Redis/Celery | Durable background work | Explicit retryable worker model and low-cost managed broker |
-| Neo4j AuraDB | Graph traversal and visualization backing | Dedicated graph capability requested for prerequisite relationships |
-| Gemini Flash-Lite | Lowest-cost multimodal generation | One stable, reproducible provider/model path for P0 |
-| Gemini embeddings | Semantic retrieval | Same-provider embedding workflow stored in pgvector |
-| Judge0 | Untrusted Python execution | Open-source sandboxed online judge with HTTP contract |
-| Railway | API, worker and Judge0 deployment | Multi-service Docker deployment with a low-cost Hobby plan |
-| Vercel | Next.js hosting | Direct framework deployment for a non-commercial academic project |
-| Docker Compose | Local parity | Reproducible PostgreSQL/pgvector, Redis, Neo4j and Judge0 dependencies |
+| Supabase Auth, pgvector, Storage | NextAuth + internal token; plain PostgreSQL; Qdrant; local volume | Identity, storage and vector migration; per-user tokens (K-4) |
+| Celery + Upstash Redis, idempotent stage keys | In-process `BackgroundTasks` | Durable worker; stage/artifact idempotency keys |
+| Neo4j projection from committed graph versions | PostgreSQL only | Projection task and rebuild path |
+| Docling + RapidOCR, Gemini multimodal fallback | `pypdf` text only | OCR and visual interpretation; scanned PDFs |
+| `gemini-2.5-flash-lite` | `gemini-3.5-flash-lite` (original retired for new callers) | Ratify the model change in `AGENTS.md` |
+| Judge0 isolated Python execution, hidden tests | None | Whole subsystem; highest-risk infra assumption |
+| React Flow graph editor, TanStack Query, shadcn/ui | Not in `package.json`; no `PUT /graph` | Frontend and endpoint work |
+| Hybrid retrieval with rerank | Vector + lexical merge, no rerank | Reranker |
+| Typed OpenAPI-generated client | Handwritten client | Client generation |
+| Vercel / Railway deployment | None | Deployment and its checks |
+| Generated-artifact registry (model, prompt/schema version, validation state, provenance for every artifact) | Prompt-version constants and per-row fields in places; no unified `generated_artifacts` table | Unify |
+| Per-call provider/model/prompt-version/token/latency logging | Call counts only | Observability (SYSTEM_ARCHITECTURE §13) |
 
-## Architecture acceptance criteria
+Target-only tables from the original plan, none of which exist:
+`document_pages`, `source_assets`, `chunk_embeddings`, `retrieval_traces`,
+`graph_versions`, `content_gaps`, `generated_artifacts`, `citations`,
+`question_validations`, `activity_instances`, `pilot_participants`,
+`pilot_sessions`, `pre_post_pairs`, `simulated_profiles`, `evaluation_runs`,
+`security_events`.
 
-- Database migrations create every P0 table and connectivity checks pass.
-- Each service boundary in the context diagram has a working health/contract check.
-- Ownership isolation prevents cross-user course, object, chunk, graph, and evaluation access.
-- Job retry does not duplicate chunks, concepts, questions, or published versions.
-- Neo4j can be deleted and rebuilt from PostgreSQL.
-- Gemini output is rejected when it fails the required schema.
-- Judge0 cannot access the public network or product secrets.
-- The two unseen document sets complete the frozen golden path.
+Target cross-store consistency (when Neo4j exists): commit the graph version and
+edges in PostgreSQL; enqueue a projection keyed by graph version; upsert into
+Neo4j with course, owner and version identifiers; record success in PostgreSQL;
+serve traversal only from the current projected version; rebuild from PostgreSQL
+on divergence. No distributed transaction.
 
-## External reference baseline
+Target Judge0 isolation: it receives only code, harness, language and limits —
+no product JWT, database URL, object URL or AI key — and has no outbound network.
+Its backing PostgreSQL and Redis are dedicated and never hold product data.
 
-Provider limits and model availability are time-sensitive. These official references were checked on 27 August 2026 and must be rechecked before deployment and the final presentation:
+## 9. Acceptance criteria
 
-- [Supabase pricing](https://supabase.com/pricing) and [pgvector documentation](https://supabase.com/docs/guides/database/extensions/pgvector)
-- [Upstash Redis pricing](https://upstash.com/pricing/redis)
-- [Neo4j AuraDB pricing](https://neo4j.com/pricing/)
-- [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing), [models](https://ai.google.dev/gemini-api/docs/models), and [embeddings](https://ai.google.dev/gemini-api/docs/embeddings)
-- [Docling supported formats](https://docling-project.github.io/docling/usage/supported_formats/) and [OCR engines](https://docling-project.github.io/docling/concepts/OCR/)
-- [Railway plans](https://docs.railway.com/pricing/plans)
-- [Vercel Hobby plan](https://vercel.com/docs/plans/hobby)
-- [Judge0 repository and deployment documentation](https://github.com/judge0/judge0)
+Criteria for the target. Met today only where stated.
+
+- Migrations create every table in use, and connectivity checks pass — *met for
+  the built tables, by migration chain; not re-executed in this pass.*
+- Ownership isolation across course, chunk, graph and evaluation access — *tests
+  exist (`tests/security`, `tests/api`); coverage is per endpoint, not exhaustive.*
+- Job retry does not duplicate chunks, concepts, questions or published versions
+  — *not verified in this pass; check `tests/service/test_jobs_service.py`.*
+- Neo4j can be deleted and rebuilt from PostgreSQL — *not applicable; no Neo4j.*
+- Model output failing its schema is rejected — *implemented at the gateway
+  boundary; confirmed by inspection only.*
+- Judge0 cannot reach the public network or product secrets — *not applicable.*
+- Two unseen document sets (one native, one scanned/visual) complete the golden
+  path — *not demonstrated; the scanned/visual set is unsupported without OCR.*
+
+## 10. External reference baseline
+
+Provider limits and model availability are time-sensitive and have already
+changed under this project (Groq and Gemini model retirements). Recheck before
+deployment: Supabase pricing and pgvector docs; Upstash Redis pricing; Neo4j
+AuraDB pricing; Gemini pricing, models and embeddings docs; Docling formats and
+OCR engines; Railway plans; Vercel Hobby plan; Judge0 deployment docs.
